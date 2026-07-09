@@ -1,0 +1,586 @@
+(ns regit.diff
+  (:require [rex.base.buffer :as buffer]
+            [rex.base.frame :as frame]
+            [rex.base.hook :refer [add-hook!]]
+            [rex.base.window :as window]
+            [rex.string :as str]
+            [rex.ui.outline :as outline]
+            [rex.base.theme :as theme])
+  (:use rex.core rex.builtins))
+
+(defn header-text [text]
+  (theme/with-face text :regit-header))
+
+(defn diff-header-text [text]
+  (theme/with-face text :regit-diff-header))
+
+(defn ensure-trailing-newline [text]
+  (let [text (str (or text ""))]
+    (if (str/ends-with? text "\n")
+      text
+      (str text "\n"))))
+
+(defn status-label [kind & [opts]]
+  (if (:raw-kind? opts)
+    (or (when kind (name kind)) "changed")
+    (case kind
+      :modified "modified"
+      :added "new file"
+      :deleted "deleted"
+      :renamed "renamed"
+      :copied "copied"
+      :typechange "typechange"
+      :unmerged "unmerged"
+      :untracked "untracked"
+      "changed")))
+
+(defn entry-path-label [entry]
+  (if-let [old-path (:old-path entry)]
+    (str old-path " -> " (:path entry))
+    (:path entry)))
+
+(defn- file-status-text [text]
+  (theme/with-face text :regit-file-status))
+
+(defn entry-header-line [entry & [opts]]
+  (str (file-status-text (or (:status-label entry) (status-label (:kind entry) opts))) " " (entry-path-label entry)))
+
+(defn entry-header-plain-text [entry & [opts]]
+  (str (or (:status-label entry) (status-label (:kind entry) opts)) " " (entry-path-label entry)))
+
+(defn- diff-addition-line? [line]
+  (and (str/starts-with? line "+")
+    (not (str/starts-with? line "+++"))))
+
+(defn- diff-removal-line? [line]
+  (and (str/starts-with? line "-")
+    (not (str/starts-with? line "---"))))
+
+(defn entry-change-summary [entry]
+  (let [lines (str/split-lines (or (:diff entry) ""))]
+    (loop [remaining (seq lines)
+           added 0
+           removed 0]
+      (if (seq remaining)
+        (let [line (first remaining)]
+          (cond
+            (diff-addition-line? line)
+            (recur (rest remaining) (inc added) removed)
+
+            (diff-removal-line? line)
+            (recur (rest remaining) added (inc removed))
+
+            :else (recur (rest remaining) added removed)))
+        {:added added :removed removed :entry entry}))))
+
+(defn summarize-entries [entries]
+  (let [files (mutable-vector)]
+    (loop [remaining (seq entries)
+           added 0
+           removed 0]
+      (if (seq remaining)
+        (let [file (entry-change-summary (first remaining))]
+          (conj files file)
+          (recur (rest remaining)
+            (+ added (:added file))
+            (+ removed (:removed file))))
+        {:added added :removed removed :files (vec files)}))))
+
+(def max-summary-bar-width 100)
+
+(defn- scaled-part-width [part max-changes]
+  (if (zero? part)
+    0
+    (max 1 (int (round (* (/ (float part) (float max-changes)) max-summary-bar-width))))))
+
+(defn- scaled-summary-widths [added removed max-changes]
+  (let [total (+ added removed)]
+    (cond
+      (zero? total) {:added 0 :removed 0}
+      (<= max-changes max-summary-bar-width) {:added added :removed removed}
+      :else (let [total-width (scaled-part-width total max-changes)]
+              (cond
+                (zero? added) {:added 0 :removed total-width}
+                (zero? removed) {:added total-width :removed 0}
+                (< total-width 2) (if (>= added removed)
+                                    {:added 1 :removed 0}
+                                    {:added 0 :removed 1})
+                :else (let [added-width (clamp (int (round (* (/ (float added) (float total)) total-width)))
+                                          1
+                                          (dec total-width))]
+                        {:added added-width
+                         :removed (- total-width added-width)}))))))
+
+(defn- summary-bar [count ch color]
+  (theme/with-color-style (repeat-str count ch) color))
+
+(defn- change-count [file]
+  (+ (:added file) (:removed file)))
+
+(defn- max-width [items default]
+  (if (seq items)
+    (reduce max (map #(count (str %)) items))
+    default))
+
+(defn- max-value [items default]
+  (if (seq items)
+    (reduce max items)
+    default))
+
+(defn- render-file-summary-line [path-width count-width max-changes file]
+  (let [added (:added file)
+        removed (:removed file)
+        path (entry-path-label (:entry file))
+        total (change-count file)
+        widths (scaled-summary-widths added removed max-changes)
+        bar (str
+              (when (> (:added widths) 0) (summary-bar (:added widths) "+" :green))
+              (when (> (:removed widths) 0) (summary-bar (:removed widths) "-" :red)))]
+    (str "  "
+      (str/right-pad path path-width)
+      " | "
+      (str/left-pad total count-width)
+      (when (seq bar) (str " " bar)))))
+
+(defn- pluralized [count singular plural]
+  (if (= count 1) singular plural))
+
+(defn- render-total-summary-line [summary]
+  (let [file-count (count (:files summary))
+        added (:added summary)
+        removed (:removed summary)]
+    (str " "
+      file-count
+      " "
+      (pluralized file-count "file" "files")
+      " changed"
+      (when (> added 0)
+        (str ", " added " " (pluralized added "insertion" "insertions") "(+)"))
+      (when (> removed 0)
+        (str ", " removed " " (pluralized removed "deletion" "deletions") "(-)"))
+      (when (and (zero? added) (zero? removed))
+        ", 0 insertions(+), 0 deletions(-)"))))
+
+(defn render-summary [entries & [label]]
+  (let [summary (summarize-entries entries)
+        files (:files summary)
+        path-width (max-width (map #(entry-path-label (:entry %)) files) 0)
+        count-width (max-width (map change-count files) 1)
+        max-changes (max-value (map change-count files) 0)]
+    (str
+      (header-text (or label "Summary:"))
+      (when (seq files)
+        (str "\n"
+          (str/join "\n" (map #(render-file-summary-line path-width count-width max-changes %) files))))
+      "\n"
+      (render-total-summary-line summary))))
+
+(defn hunk-header-line? [line]
+  (let [line (str line)]
+    (or (str/starts-with? line "@@ ")
+      (str/starts-with? line "@@@ "))))
+
+(defn parse-hunk-header [header]
+  (let [header (or header "")
+        unified-match (re-find #"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@" header)
+        combined-match (re-find #"^@@@ -(\d+)(?:,\d+)?(?: -\d+(?:,\d+)?)+ \+(\d+)(?:,\d+)? @@@" header)
+        match (or unified-match combined-match)]
+    (if match
+      {:old-start (read-string (nth match 1))
+       :new-start (read-string (nth match 2))}
+      {:old-start 1 :new-start 1})))
+
+(defn hunk-stable-id [section hunk-info]
+  (if (or (= section :staged) (= section :old))
+    (:old-start hunk-info)
+    (:new-start hunk-info)))
+
+(defn split-diff-hunks [lines]
+  (git-split-diff-hunks lines))
+
+(defn find-hunk [entry hunk-id-section hunk-id]
+  (let [lines (str/split-lines (or (:diff entry) ""))
+        {:keys [hunks]} (split-diff-hunks lines)]
+    (some (fn [hunk]
+            (let [info (parse-hunk-header (first hunk))]
+              (when (= (hunk-stable-id hunk-id-section info) hunk-id)
+                hunk)))
+      hunks)))
+
+(defn- line-counted-for-target? [line target-type]
+  (case target-type
+    :old (or (str/starts-with? line "-") (str/starts-with? line " "))
+    (or (str/starts-with? line "+") (str/starts-with? line " "))))
+
+(defn- hunk-line-offset [hunk line-offset target-type]
+  (if (and hunk line-offset (> line-offset 0))
+    (loop [idx 1
+           offset 0]
+      (if (or (>= idx line-offset) (>= idx (count hunk)))
+        offset
+        (recur (inc idx)
+          (if (line-counted-for-target? (nth hunk idx) target-type)
+            (inc offset)
+            offset))))
+    0))
+
+(defn- hunk-target-start-line [hunk-info target-type]
+  (dec (case target-type
+         :old (:old-start hunk-info)
+         (:new-start hunk-info))))
+
+(defn hunk-line-prefix [line-text]
+  (let [line (str/triml (str line-text))]
+    (cond
+      (str/starts-with? line "-") :removed
+      (str/starts-with? line "+") :added
+      :else nil)))
+
+(defn hunk-target-type [line-text force-file?]
+  (if (and (not force-file?) (= (hunk-line-prefix line-text) :removed))
+    :old
+    :new))
+
+(defn hunk-target-line [hunk hunk-info line-offset target-type]
+  (+ (hunk-target-start-line hunk-info target-type)
+    (hunk-line-offset hunk line-offset target-type)))
+
+(defn show-buffer-at-line! [buffer line]
+  (let [window (focused-window)
+        last-line (max 0 (dec (buffer-lines buffer)))
+        target-line (max 0 (min line last-line))
+        pos (with-read-lock [lock (buffer-text buffer)]
+              (buffer/line-to-char lock target-line))]
+    (set-window-buffer buffer window)
+    (move-cursor pos false window)
+    (binding [*window* window
+              *buffer* buffer]
+      (recenter-scroll window))
+    buffer))
+
+(defn open-working-file-at-line! [path line]
+  (show-buffer-at-line! (open-file path) line))
+
+(defn hunk-path [path hunk-id & [section]]
+  (if section
+    [:hunk section path hunk-id]
+    [:hunk path hunk-id]))
+
+(def outline-item-tag :outline-item)
+
+(defn outline-item? [item]
+  (record-vector? item outline-item-tag))
+
+(defn make-outline-item [id text landmark initially-expanded? line-overlay-style children entry hunk-patch leaf-hint-span? & [children-cache deferred-children item-cache]]
+  [outline-item-tag
+   id
+   text
+   landmark
+   initially-expanded?
+   line-overlay-style
+   children
+   entry
+   hunk-patch
+   leaf-hint-span?
+   children-cache
+   deferred-children
+   item-cache])
+
+(defn outline-item-field [item key idx]
+  (record-get item outline-item-tag key idx))
+
+(defn outline-item-id [item]
+  (outline-item-field item :id 1))
+
+(defn outline-item-text [item]
+  (outline-item-field item :text 2))
+
+(defn outline-item-entry [item]
+  (outline-item-field item :entry 7))
+
+(defn outline-item-hunk-patch [item]
+  (outline-item-field item :hunk-patch 8))
+
+(defn outline-item-log-ref [item]
+  (outline-item-field item :log-ref 13))
+
+(defn outline-item-entries [item]
+  (outline-item-field item :entries 14))
+
+(defn outline-item-stash [item]
+  (outline-item-field item :stash 15))
+
+(defn- diff-line-props [color opts]
+  (let [style (if (:highlight-bg? opts)
+                {:fg color :bg (:bg (theme/face-map :highlight-bg))}
+                {:fg color})]
+    (make-text-prop {:style style})))
+
+(defn- diff-render-props [opts]
+  (let [diff-header-style-map (theme/face-map :regit-diff-header)]
+    {:diff-header-props (if diff-header-style-map
+                          (make-text-prop {:style (dissoc diff-header-style-map :bg)})
+                          (theme/style-for-face :regit-diff-header))
+     :diff-header-overlay (theme/style-for-face :regit-diff-header)
+     :green-props (diff-line-props :green opts)
+     :red-props (diff-line-props :red opts)}))
+
+(defn- render-diff-line-values [lines render-props]
+  (git-render-diff-line-values lines
+    (:diff-header-props render-props)
+    (:green-props render-props)
+    (:red-props render-props)))
+
+(defn- make-diff-line-items [content-lines hunk-path old-hunk-items opts entry patch]
+  (let [items (mutable-vector)]
+    (loop [idx 1]
+      (if (< idx (count content-lines))
+        (let [line-text (nth content-lines idx)
+              id (conj hunk-path idx)
+              cached (when (:preserve-item-cache? opts)
+                       (record-find old-hunk-items outline-item-tag :id 1 id))
+              item-cache (when (:preserve-item-cache? opts)
+                           (or (outline-item-field cached :item-cache 12) (atom nil)))
+              item [outline-item-tag
+                    id
+                    line-text
+                    id
+                    false
+                    nil
+                    []
+                    (when (:include-entry? opts) entry)
+                    (when (:include-patch? opts) patch)
+                    false
+                    nil
+                    nil
+                    item-cache]]
+          (conj items item)
+          (recur (inc idx)))
+        (vec items)))))
+
+(defn make-diff-hunk-items [path hunk lines & [opts]]
+  (let [hunk-header (first lines)
+        section (:hunk-id-section opts)
+        hunk-info (or (:hunk-info opts) (parse-hunk-header hunk-header))
+        hunk-id (or (:hunk-id opts) (hunk-stable-id section hunk-info))
+        hunk-path (or (:hunk-path opts) (hunk-path path hunk-id (:path-section opts)))
+        render-props (or (:render-props opts) (diff-render-props opts))
+        content-lines (or (:rendered-lines opts)
+                        (render-diff-line-values lines render-props))
+        styled-header (first content-lines)
+        old-hunk-items (:old-hunk-items opts)
+        entry (:entry opts)
+        patch (when (:include-patch? opts) (ensure-trailing-newline (str/join "\n" (concat (:preamble opts) lines))))
+        items (make-diff-line-items content-lines hunk-path old-hunk-items opts entry patch)]
+    {:header styled-header
+     :items items
+     :hunk-patch patch
+     :header-style (:diff-header-overlay render-props)}))
+
+(defn make-file-entry-items [entry & [opts]]
+  (let [path (:path entry)
+        diff (str/trim-newline (or (:diff entry) ""))
+        lines (if (seq diff) (str/split-lines diff) [])
+        {:keys [preamble hunks]} (split-diff-hunks lines)
+        render-props (diff-render-props opts)
+        rendered-lines (if (seq hunks)
+                         (render-diff-line-values lines render-props)
+                         [])]
+    (let [items (mutable-vector)]
+      (loop [remaining-hunks (seq hunks)
+             offset (count preamble)]
+        (if (seq remaining-hunks)
+          (let [hunk (first remaining-hunks)
+                h-info (parse-hunk-header (first hunk))
+                h-id (hunk-stable-id (:hunk-id-section opts) h-info)
+                h-path (hunk-path path h-id (:path-section opts))
+                hunk-line-count (count hunk)
+                hunk-rendered-lines (subvec rendered-lines offset (+ offset hunk-line-count))
+                old-items (:old-items opts)
+                old-hunk (when (:preserve-item-cache? opts)
+                           (record-find old-items outline-item-tag :id 1 h-path))
+                old-hunk-items (when (:preserve-item-cache? opts)
+                                 (record-filter-prefix old-items outline-item-tag :id 1 h-path))
+                hunk-data (make-diff-hunk-items path hunk hunk (assoc opts
+                                                                 :entry entry
+                                                                 :preamble preamble
+                                                                 :old-hunk-items old-hunk-items
+                                                                 :hunk-info h-info
+                                                                 :hunk-id h-id
+                                                                 :hunk-path h-path
+                                                                 :render-props render-props
+                                                                 :rendered-lines hunk-rendered-lines))
+                item-cache (when (:preserve-item-cache? opts)
+                             (or (outline-item-field old-hunk :item-cache 12) (atom nil)))
+                item [outline-item-tag
+                      h-path
+                      (:header hunk-data)
+                      h-path
+                      true
+                      (:header-style hunk-data)
+                      (:items hunk-data)
+                      (when (:include-entry? opts) entry)
+                      (when (:include-patch? opts) (:hunk-patch hunk-data))
+                      true
+                      nil
+                      nil
+                      item-cache]]
+            (conj items item)
+            (recur (rest remaining-hunks) (+ offset hunk-line-count)))
+          (vec items))))))
+
+(defn- hunk-outline-item? [item]
+  (and (outline-item? item)
+    (let [id (outline-item-id item)]
+      (and (vector? id)
+        (> (count id) 0)
+        (= (first id) :hunk)))))
+
+(defn diff-context-line-for-line [line buffer]
+  (when (and (integer? line) (>= line 0) buffer)
+    (let [items (:line-to-item @(buffer-state buffer))
+          item (when (and items (< line (count items)))
+                 (get items line))
+          entry (when (hunk-outline-item? item)
+                  (outline-item-entry item))]
+      (when entry
+        (entry-header-plain-text entry)))))
+
+(defn diff-context-line-for-start [start-line buffer]
+  (when (and (integer? start-line) (> start-line 0))
+    (diff-context-line-for-line (dec start-line) buffer)))
+
+(defn- diff-context-row [text]
+  (if (and text (not= text ""))
+    {:text text :style (theme/style-for-face :regit-diff-context)}
+    {:text ""}))
+
+(defn- render-regit-diff-context-decoration [_width height start-line]
+  (let [row-count (max 0 (int height))
+        blank (diff-context-row "")
+        rows (atom (mapv (fn [_] blank) (range row-count)))]
+    (when (> row-count 0)
+      (swap! rows assoc 0
+        (diff-context-row
+          (or (diff-context-line-for-start start-line *buffer*) ""))))
+    @rows))
+
+(define-buffer-decoration regit-diff-context-decoration
+  #'render-regit-diff-context-decoration
+  :allow-active-line-style false)
+
+(defn regit-diff-context-decoration-for-buffer [buffer]
+  (when buffer
+    (first (filter #(= (:key %) :regit-diff-context)
+             (buffer-decorations buffer)))))
+
+(defn ensure-diff-context-decoration! [buffer]
+  (when buffer
+    (or (regit-diff-context-decoration-for-buffer buffer)
+      (do
+        (add-buffer-decoration :regit-diff-context :top 0 #'regit-diff-context-decoration buffer)
+        (regit-diff-context-decoration-for-buffer buffer)))))
+
+(defn- safe-window-buffer [win]
+  (ignore-errors
+    (when win (window-buffer win))))
+
+(defn- valid-diff-context-window [win]
+  (when (safe-window-buffer win) win))
+
+(defn- current-diff-context-window []
+  (or (valid-diff-context-window *window*)
+    (valid-diff-context-window (ignore-errors (focused-window)))))
+
+(defn- window-top-visible-line [win]
+  (or
+    (ignore-errors
+      (let [lines (and win (window-visible-lines win))]
+        (when (and lines (> (count lines) 0))
+          (first lines))))
+    (ignore-errors
+      (when win (scroll-offset win)))))
+
+(defn diff-context-decoration-size-for-line [buffer line]
+  (if (diff-context-line-for-line line buffer) 1 0))
+
+(defn set-diff-context-decoration-size! [buffer size]
+  (when-let [decoration (ensure-diff-context-decoration! buffer)]
+    (set-buffer-decoration-size (:id decoration) size buffer)
+    decoration))
+
+(defn sync-diff-context-decoration-size-for-window! [win]
+  (let [buffer (safe-window-buffer win)]
+    (when (regit-diff-context-decoration-for-buffer buffer)
+      (binding [*buffer* buffer
+                *window* win]
+        (set-diff-context-decoration-size! buffer
+          (diff-context-decoration-size-for-line buffer
+            (window-top-visible-line win)))))))
+
+(add-hook! [window/on-window-scrolled regit-diff-context-window-scrolled-hook] [_old-offset _new-offset]
+  (sync-diff-context-decoration-size-for-window!
+    (current-diff-context-window)))
+
+(add-hook! [window/on-window-select-buffer regit-diff-context-window-select-buffer-hook] [win _buffer]
+  (sync-diff-context-decoration-size-for-window! win))
+
+(add-hook! [window/on-window-resized regit-diff-context-window-resized-hook] [win _old-size _new-size]
+  (sync-diff-context-decoration-size-for-window! win))
+
+(defn configure-outline-buffer! [buffer]
+  (binding [*buffer* buffer]
+    (set-local! outline/*show-arrows* false)
+    (set-local! outline/*indent-width* 0))
+  (ensure-diff-context-decoration! buffer)
+  (sync-diff-context-decoration-size-for-window! (current-diff-context-window))
+  true)
+
+(defn initialize-expanded-ids! [buffer tree initial-expanded file-ids-fn]
+  (let [state-atom (buffer-state buffer)]
+    (when-not (:expanded-ids @state-atom)
+      (swap! state-atom assoc :expanded-ids (into initial-expanded (file-ids-fn tree))))))
+
+(defn- split-view-window-from! [window]
+  (let [focused-before (focused-window)]
+    (set-focused-window window)
+    (let [new-window (binding [*window* window]
+                       (frame/split-window-auto))]
+      (when (and focused-before (window-frame focused-before))
+        (set-focused-window focused-before))
+      new-window)))
+
+(defn regit-view-window [& [opts]]
+  (let [window (or (:source-window opts) (focused-window))
+        windows (frame-normal-windows)]
+    (if (<= (count windows) 1)
+      (let [new-window (if (:source-window opts)
+                         (split-view-window-from! window)
+                         (binding [*window* window]
+                           (frame/split-window-auto)))]
+        (if (:fallback-to-created-window? opts)
+          (or new-window
+            (first (remove #(= % window) (frame-normal-windows)))
+            (focused-window))
+          new-window))
+      (let [others (remove #(= % window) windows)]
+        (if (empty? others)
+          (binding [*window* window]
+            (frame/split-window-auto))
+          (reduce (fn [w1 w2]
+                    (let [s1 (window-size w1)
+                          s2 (window-size w2)]
+                      (if (> (* (:width s1) (:height s1))
+                            (* (:width s2) (:height s2)))
+                        w1 w2)))
+            others))))))
+
+(defn find-named-buffer [name]
+  (first (filter #(= (:name %) name) (list-buffers))))
+
+(defn close-buffer-returning-to-window! []
+  (let [state @(buffer-state)
+        return-window (:return-window state)]
+    (close-buffer)
+    (when (and return-window (window-frame return-window))
+      (set-focused-window return-window))))

@@ -1,0 +1,1032 @@
+(ns regit.rebase
+  (:require [regit.command :as regit-command :refer [regit-command]]
+            [regit.log-select :as log-select]
+            [regit.util :as regit-util :refer [with-status-buffer-pending]]
+            [rex.ui.iselect :as iselect]
+            [rex.ui.simple-prompt :as simple-prompt]
+            [rex.base.hook :refer [run-hooks]]
+            [rex.base.keys :as keys :refer [make-keymap map!]]
+            [rex.base.mode :as mode :refer [activate-mode register-mode]]
+            [rex.base.project :as project]
+            [rex.base.buffer :as buffer]
+            [rex.base.window :as window]
+            [rex.base.frame :as frame]
+            [rex.base.theme :as theme]
+            [rex.nav :as nav]
+            [rex.string :as str])
+  (:use rex.core rex.builtins))
+
+(def rebase-merges-modes ["no-rebase-cousins" "rebase-cousins"])
+(def commit-actions #{"pick" "p" "reword" "r" "edit" "e" "squash" "s" "fixup" "f" "drop" "d"})
+
+(declare
+  git-rebase-todo-submit
+  git-rebase-todo-abort
+  run-rebase-onto!
+  run-rebase-interactive!
+  run-rebase-subset!
+  run-rebase-edit-commit!
+  run-rebase-reword-commit!
+  run-rebase-remove-commit!
+  run-rebase-autosquash!
+  run-rebase-continue!
+  run-rebase-skip!
+  run-rebase-edit-todo!
+  run-rebase-abort!)
+
+(defn- git-cmd [root & args]
+  (run-shell* "git" (into ["-C" (str root)] args)))
+
+(defn- git-cmd-env [root env & args]
+  (run-shell* "git" (into ["-C" (str root)] args) {:env env}))
+
+(defn- get-git-output [root & args]
+  (let [result (apply git-cmd root args)]
+    (when (zero? (:code result))
+      (str/trim (:out result)))))
+
+(defn- current-branch [root]
+  (try
+    (git-current-branch root)
+    (catch _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
+
+(defn- git-dir [root]
+  (let [dir (get-git-output root "rev-parse" "--git-dir")]
+    (when-not (str/blank? (or dir ""))
+      (if (str/starts-with? dir "/")
+        dir
+        (path-join root dir)))))
+
+(defn- git-file [root file]
+  (when-let [dir (git-dir root)]
+    (path-join dir file)))
+
+(defn rebase-in-progress? [root]
+  (let [merge-dir (git-file root "rebase-merge")
+        apply-onto (git-file root "rebase-apply/onto")]
+    (or (and merge-dir (path-exists? merge-dir))
+      (and apply-onto (path-exists? apply-onto)))))
+
+(defn- rebase-merge? [root]
+  (let [merge-dir (git-file root "rebase-merge")]
+    (and merge-dir (path-exists? merge-dir))))
+
+(defn- rebase-state-file [root file]
+  (git-file root (str (if (rebase-merge? root) "rebase-merge/" "rebase-apply/") file)))
+
+(defn- read-state-file [root file]
+  (let [path (rebase-state-file root file)]
+    (when (and path (path-exists? path))
+      (try
+        (str/trim (read-file path))
+        (catch _ nil)))))
+
+(defn- read-state-lines [root file]
+  (let [text (read-state-file root file)]
+    (vec (->> (str/split (or text "") #"\r?\n")
+           (map str/trim)
+           (remove str/blank?)))))
+
+(defn- result-details [result]
+  (->> [(:err result) (:out result)]
+    (map str/trim)
+    (remove str/blank?)
+    (str/join "\n")))
+
+(defn- git-error-message [operation result]
+  (let [details (result-details result)]
+    (if (str/blank? details)
+      (str operation " failed (exit " (:code result) ")")
+      (str operation " failed: " details))))
+
+(defn- notify-project-file-git-change! [root]
+  (doseq [buf (project/project-file-buffers root)]
+    (when-let [file (:file buf)]
+      (binding [*buffer* buf]
+        (run-hooks buffer/on-buffer-file-git-change file)))))
+
+(defn- refresh-status! [root start-window]
+  (when (call-var regit.status/find-status-buffer root)
+    (let [should-focus? (if start-window (= (focused-window) start-window) nil)]
+      (or (call-var regit.status/refresh-status! root should-focus?)
+        (call-var regit.status/regit-status root should-focus?)))))
+
+(defn- after-git-change! [root start-window]
+  (git-refresh-index root)
+  (git-clear-repo-cache)
+  (notify-project-file-git-change! root)
+  (refresh-status! root start-window))
+
+(defn- run-git-result! [root operation result opts]
+  (let [start-window (:start-window opts)
+        success-message (:success-message opts)
+        refresh? (not= false (:refresh? opts))
+        success? (zero? (:code result))]
+    (when refresh?
+      (after-git-change! root start-window))
+    (if success?
+      (do
+        (when-not (str/blank? (or success-message ""))
+          (message success-message))
+        nil)
+      (let [msg (git-error-message operation result)]
+        (message msg)
+        msg))))
+
+(defn- run-git! [root operation args & [opts]]
+  (let [opts (or opts {})]
+    (with-status-buffer-pending root
+      (run-git-result! root operation (apply git-cmd root args) opts))))
+
+(defn- run-git-env! [root operation env args & [opts]]
+  (let [opts (or opts {})]
+    (with-status-buffer-pending root
+      (run-git-result! root operation (apply git-cmd-env root env args) opts))))
+
+(defn- run-git-with-commit-editor! [root operation env args & [opts]]
+  (let [opts (or opts {})]
+    (regit-util/run-git-with-commit-editor! root operation env args
+      (assoc opts
+        :on-result (fn [result]
+                     (run-git-result! root operation result opts))
+        :on-abort (fn []
+                    (after-git-change! root (:start-window opts)))))))
+
+(defn- ref-lines [root & args]
+  (let [out (apply get-git-output root args)]
+    (vec (->> (str/split (or out "") #"\r?\n")
+           (map str/trim)
+           (remove str/blank?)))))
+
+(defn- local-branches [root]
+  (ref-lines root "for-each-ref" "--format=%(refname:short)" "refs/heads"))
+
+(defn- remote-branches [root]
+  (vec (->> (ref-lines root "for-each-ref" "--format=%(refname:short)" "refs/remotes")
+         (remove #(str/ends-with? % "/HEAD")))))
+
+(defn- rebase-targets [root]
+  (vec (distinct (concat (local-branches root) (remote-branches root)))))
+
+(defn- selected-target [input selected-entry]
+  (let [input (str/trim (str input))
+        selected (when selected-entry (str selected-entry))]
+    (if (str/blank? (or selected ""))
+      input
+      selected)))
+
+(defn- select-target [prompt entries on-select]
+  (let [entries (vec entries)
+        submit-fn (fn [input selected-entry]
+                    (let [target (selected-target input selected-entry)]
+                      (if (str/blank? (or target ""))
+                        (do
+                          (message "No revision selected")
+                          :keep-open)
+                        (fn []
+                          (let [result (on-select target)]
+                            (when (string? result)
+                              (message result))
+                            result)))))]
+    (iselect/iselect
+      prompt
+      (fn [_input] entries)
+      (fn [_entry] nil)
+      {:complete-fn #'iselect/complete-to-first-and-select
+       :submit-fn submit-fn
+       :sync-input-on-move? false
+       :preserve-selection? true
+       :clear-selection-on-input? true})))
+
+(defn- rev-name [root rev]
+  (or (get-git-output root "rev-parse" "--abbrev-ref" "--symbolic-full-name" rev)
+    (get-git-output root "name-rev" "--name-only" "--no-undefined" rev)))
+
+(defn- upstream-target [root]
+  (rev-name root "@{upstream}"))
+
+(defn- push-remote-target [root]
+  (rev-name root "@{push}"))
+
+(defn- commit-parent-target [root commit]
+  (let [parents (get-git-output root "rev-list" "--parents" "-n" "1" commit)
+        parts (remove str/blank? (str/split (or parents "") #"\s+"))]
+    (if (> (count parts) 1)
+      {:args [(str commit "^")]}
+      {:args ["--root"]})))
+
+(defn rebase-args [args-values]
+  (let [args-values (merge {:autostash true} (or args-values {}))
+        rebase-merges (:rebase-merges args-values)]
+    (cond-> []
+      (:keep-empty args-values) (conj "--keep-empty")
+      (not (str/blank? (or rebase-merges ""))) (conj (str "--rebase-merges=" rebase-merges))
+      (:update-refs args-values) (conj "--update-refs")
+      (:committer-date-is-author-date args-values) (conj "--committer-date-is-author-date")
+      (:ignore-date args-values) (conj "--ignore-date")
+      (:autosquash args-values) (conj "--autosquash")
+      (:autostash args-values) (conj "--autostash")
+      (:interactive args-values) (conj "--interactive")
+      (:no-verify args-values) (conj "--no-verify"))))
+
+(defn- ensure-interactive-arg [args]
+  (if (some #(or (= % "-i") (= % "--interactive")) args)
+    args
+    (vec (cons "--interactive" args))))
+
+(defn- rebase-command-args [args-values suffix & [force-interactive?]]
+  (let [args (rebase-args args-values)
+        args (if force-interactive? (ensure-interactive-arg args) args)]
+    (vec (concat ["rebase"] args suffix))))
+
+(defn- write-shell-script! [name content]
+  (let [path (temp-file-path name)]
+    (write-file path content)
+    path))
+
+(defn- capture-editor-script [todo-path]
+  (write-shell-script! "regit-rebase-capture-editor"
+    (str "#!/bin/sh\n"
+      "cp \"$1\" \"" todo-path "\"\n"
+      "exit 1\n")))
+
+(defn- use-todo-editor-script [todo-path]
+  (write-shell-script! "regit-rebase-use-todo-editor"
+    (str "#!/bin/sh\n"
+      "cp \"" todo-path "\" \"$1\"\n")))
+
+(defn- action-editor-script []
+  (write-shell-script! "regit-rebase-action-editor"
+    (str "#!/bin/sh\n"
+      "todo=\"$1\"\n"
+      "tmp=\"$todo.regit\"\n"
+      "awk '\n"
+      "BEGIN { target = ENVIRON[\"REGIT_REBASE_TARGET\"]; action = ENVIRON[\"REGIT_REBASE_ACTION\"]; changed = 0 }\n"
+      "$1 == \"pick\" && changed == 0 && (index($2, target) == 1 || index(target, $2) == 1) { $1 = action; changed = 1 }\n"
+      "{ print }\n"
+      "END { if (changed == 0) exit 2 }\n"
+      "' \"$todo\" > \"$tmp\" && mv \"$tmp\" \"$todo\"\n")))
+
+(defn- message-editor-script []
+  (write-shell-script! "regit-rebase-message-editor"
+    (str "#!/bin/sh\n"
+      "printf '%s\n' \"$REGIT_COMMIT_MESSAGE\" > \"$1\"\n")))
+
+(defn- true-editor-env []
+  {"GIT_SEQUENCE_EDITOR" "true"})
+
+(defn- plain-text [value]
+  (str/strip-properties (or value "")))
+
+(def magit-rebase-todo-command-lines
+  ["# Commands:"
+   "# p        pick = use commit"
+   "# r        reword = use commit, but edit the commit message"
+   "# e        edit = use commit, but stop for amending"
+   "# s        squash = use commit, but meld into previous commit"
+   "# f        fixup [-C | -c] <commit> = like \"squash\" but keep only the previous"
+   "#                    commit's log message, unless -C is used, in which case"
+   "#                    keep only this commit's message; -c is same as -C but"
+   "#                    opens the editor"
+   "# x        exec <command> = run command (the rest of the line) using shell"
+   "# b        break = stop here (continue rebase later with 'git rebase --continue')"
+   "# d        drop = remove commit"
+   "# u        undo last change"
+   "# ZZ       tell Git to make it happen"
+   "# ZQ       tell Git that you changed your mind, i.e. abort"
+   "# k        move point to previous line"
+   "# j        move point to next line"
+   "# M-k      move the commit at point up"
+   "# M-j      move the commit at point down"
+   "# s-k      move the commit at point up"
+   "# s-j      move the commit at point down"
+   "# <enter>  show the commit at point in another buffer"
+   "#"
+   "#          commit's log message, unless -c is used, in which case"
+   "#          keep only this commit's message; -C is same as -c but"
+   "#          opens the editor"
+   "# m, merge [-C <commit> | -c <commit>] <label> [# <oneline>]"
+   "#          create a merge commit using the original merge commit's"
+   "#          message (or the oneline, if no original merge commit was"
+   "#          specified); use -c <commit> to reword the commit message"
+   "#                    to this position in the new commits. The <ref> is"
+   "#                    updated at the end of the rebase"
+   "#"])
+
+(defn- split-todo-lines [text]
+  (str/split-lines (plain-text text)))
+
+(defn- first-line-index-after [lines start pred]
+  (first
+    (keep-indexed
+      (fn [idx line]
+        (when (and (>= idx start) (pred line))
+          idx))
+      lines)))
+
+(defn- todo-line-starts-with? [prefix line]
+  (str/starts-with? (or line "") prefix))
+
+(defn- normalize-rebase-todo-command-lines [lines]
+  (if-let [start (first-line-index-after lines 0 #(todo-line-starts-with? "# Commands:" %))]
+    (let [after-start (inc start)
+          end (or (first-line-index-after lines after-start #(todo-line-starts-with? "# These lines can be re-ordered" %))
+                (count lines))]
+      (vec
+        (concat
+          (subvec lines 0 start)
+          magit-rebase-todo-command-lines
+          (subvec lines end))))
+    lines))
+
+(defn- with-original-trailing-newline [original rendered]
+  (if (str/ends-with? (plain-text original) "\n")
+    (str rendered "\n")
+    rendered))
+
+(defn- augment-rebase-todo-text [text]
+  (let [raw (plain-text text)
+        lines (normalize-rebase-todo-command-lines (vec (split-todo-lines raw)))]
+    (with-original-trailing-newline raw (str/join "\n" lines))))
+
+(defn- render-rebase-todo-line [line]
+  (let [raw (plain-text line)
+        [_ indent action trailer] (re-find #"^(\s*)(\S+)(.*)$" raw)]
+    (if (and action
+          (contains? commit-actions action)
+          (not (str/starts-with? raw "#")))
+      (str indent (theme/with-face action :git-rebase-todo-action) trailer)
+      raw)))
+
+(defn- render-rebase-todo-text [text]
+  (let [raw (plain-text text)
+        rendered (str/join "\n" (mapv render-rebase-todo-line (split-todo-lines raw)))]
+    (with-original-trailing-newline raw rendered)))
+
+(defn- open-rebase-todo-buffer! [root command-args return-window]
+  (let [todo-path (temp-file-path "git-rebase-todo")
+        editor-script (capture-editor-script todo-path)
+        env {"GIT_SEQUENCE_EDITOR" (str "sh " editor-script)}
+        result (apply git-cmd-env root env command-args)]
+    (if (and (not (path-exists? todo-path))
+          (not (zero? (:code result))))
+      (let [msg (git-error-message "Interactive rebase" result)]
+        (message msg)
+        msg)
+      (let [buffer (create-buffer true)
+            window (or return-window (focused-window))
+            text (augment-rebase-todo-text (try (read-file todo-path) (catch _ "")))]
+        (frame/with-render-coalescing
+          (set-buffer-name (str "*git-rebase-todo: " (or (path-filename root) root) "*") buffer)
+          (swap! (buffer-state buffer) assoc
+            :project-root root
+            :regit-root root
+            :regit-rebase-command-args command-args
+            :todo-path todo-path
+            :todo-operation :start
+            :return-window return-window
+            :label (str (theme/with-face "git-rebase-todo: " :special-buffer)
+                     (theme/with-face (or (path-filename root) root) :regit-repo)))
+          (set-window-buffer buffer window)
+          (set-focused-window window)
+          (binding [*buffer* buffer
+                    *window* window]
+            (activate-mode :git-rebase-todo)
+            (buffer/with-override-read-only buffer
+              (set-string (render-rebase-todo-text text) buffer))
+            (set-buffer-read-only true buffer)
+            (move-cursor 0 false window)
+            (set-scroll-offset 0 window)))
+        buffer))))
+
+(defn- editable-rebase-todo-path [root]
+  (let [path (git-file root "rebase-merge/git-rebase-todo")]
+    (when (and path (path-exists? path))
+      path)))
+
+(defn- open-existing-rebase-todo-buffer! [root return-window]
+  (if-let [todo-path (editable-rebase-todo-path root)]
+    (let [buffer (create-buffer true)
+          window (or return-window (focused-window))
+          text (augment-rebase-todo-text (try (read-file todo-path) (catch _ "")))]
+      (frame/with-render-coalescing
+        (set-buffer-name (str "*git-rebase-todo: " (or (path-filename root) root) "*") buffer)
+        (swap! (buffer-state buffer) assoc
+          :project-root root
+          :regit-root root
+          :todo-path todo-path
+          :todo-operation :edit-todo
+          :return-window return-window
+          :label (str (theme/with-face "git-rebase-todo: " :special-buffer)
+                   (theme/with-face (or (path-filename root) root) :regit-repo)))
+        (set-window-buffer buffer window)
+        (set-focused-window window)
+        (binding [*buffer* buffer
+                  *window* window]
+          (activate-mode :git-rebase-todo)
+          (buffer/with-override-read-only buffer
+            (set-string (render-rebase-todo-text text) buffer))
+          (set-buffer-read-only true buffer)
+          (move-cursor 0 false window)
+          (set-scroll-offset 0 window)))
+      buffer)
+    "No editable rebase todo found"))
+
+(defn- buffer-string [& [buf]]
+  (let [buf (or buf *buffer*)]
+    (with-read-lock [lock (buffer-text buf)]
+      (buffer/slice lock 0 (buffer/len-chars lock)))))
+
+(defn- todo-window []
+  (or (focused-window) *window*))
+
+(defn- todo-buffer []
+  (or (when-let [win (todo-window)]
+        (window-buffer win))
+    *buffer*))
+
+(defn- buffer-display-string [& [buf]]
+  (plain-text (buffer-string (or buf (todo-buffer)))))
+
+(defn- todo-buffer-lines [& [buf]]
+  (split-todo-lines (buffer-display-string (or buf (todo-buffer)))))
+
+(defn- current-todo-line [& [buf win]]
+  (let [buf (or buf (todo-buffer))
+        win (or win (todo-window))]
+    (with-read-lock [lock (buffer-text buf)]
+      (buffer/char-to-line lock (cursor-position win)))))
+
+(defn- move-to-line! [line & [buf win]]
+  (let [buf (or buf (todo-buffer))
+        win (or win (todo-window))
+        line-count (count (todo-buffer-lines buf))
+        line (max 0 (min line (max 0 (dec line-count))))
+        pos (with-read-lock [lock (buffer-text buf)]
+              (buffer/line-to-char lock line))]
+    (if win
+      (move-cursor pos false win)
+      (move-cursor pos))))
+
+(defn- set-buffer-lines! [lines & [target-line]]
+  (let [buf (todo-buffer)
+        target-line (or target-line (current-todo-line))
+        content (str/join "\n" lines)]
+    (buffer/with-override-read-only buf
+      (set-string (render-rebase-todo-text content) buf))
+    (move-to-line! target-line buf)))
+
+(defn- line-action [line]
+  (let [[_match indent action separator target trailer] (re-find #"^(\s*)(\S+)(\s+)(\S+)(.*)$" (str/trim-newline (plain-text line)))]
+    (when action
+      {:indent (or indent "")
+       :action action
+       :separator (or separator " ")
+       :target target
+       :trailer (or trailer "")})))
+
+(defn- canonical-action [action]
+  (case action
+    "p" "pick"
+    "r" "reword"
+    "e" "edit"
+    "s" "squash"
+    "f" "fixup"
+    "d" "drop"
+    action))
+
+(defn- current-line-text []
+  (let [buf (todo-buffer)
+        win (todo-window)]
+    (with-read-lock [lock (buffer-text buf)]
+      (let [line (current-todo-line buf win)]
+        (when (< line (buffer/len-lines lock))
+          (plain-text (buffer/text-line lock line)))))))
+
+(defn- replace-current-line! [new-line & [target-line]]
+  (let [line (current-todo-line)
+        lines (vec (todo-buffer-lines))]
+    (when (< line (count lines))
+      (set-buffer-lines! (assoc lines line new-line) (or target-line line)))))
+
+(defn- insert-line-after-current! [new-line]
+  (let [line (current-todo-line)
+        lines (vec (todo-buffer-lines))
+        insert-at (min (inc line) (count lines))]
+    (set-buffer-lines!
+      (vec (concat (subvec lines 0 insert-at) [new-line] (subvec lines insert-at)))
+      insert-at)))
+
+(defn- delete-current-line! []
+  (let [line (current-todo-line)
+        lines (vec (todo-buffer-lines))]
+    (when (< line (count lines))
+      (set-buffer-lines!
+        (vec (concat (subvec lines 0 line) (subvec lines (inc line))))
+        (min line (max 0 (- (count lines) 2)))))))
+
+(defn- set-current-commit-action! [action]
+  (let [line (current-todo-line)
+        text (current-line-text)
+        parsed (line-action text)]
+    (if (and parsed (contains? commit-actions (:action parsed)))
+      (replace-current-line! (str (:indent parsed)
+                               action
+                               (:separator parsed)
+                               (:target parsed)
+                               (:trailer parsed))
+        (inc line))
+      (message (str "No commit action at point for " action)))))
+
+(defn ^:interactive git-rebase-todo-pick []
+  (set-current-commit-action! "pick"))
+
+(defn ^:interactive git-rebase-todo-reword []
+  (set-current-commit-action! "reword"))
+
+(defn ^:interactive git-rebase-todo-edit []
+  (set-current-commit-action! "edit"))
+
+(defn ^:interactive git-rebase-todo-squash []
+  (set-current-commit-action! "squash"))
+
+(defn ^:interactive git-rebase-todo-fixup []
+  (set-current-commit-action! "fixup"))
+
+(defn ^:interactive git-rebase-todo-drop []
+  (set-current-commit-action! "drop"))
+
+(defn ^:interactive git-rebase-todo-comment []
+  (let [line (current-line-text)]
+    (cond
+      (str/starts-with? (or line "") "# ")
+      (replace-current-line! (subs line 2))
+
+      (str/starts-with? (or line "") "#")
+      (replace-current-line! (str/triml (subs line 1)))
+
+      :else
+      (replace-current-line! (str "# " line)))))
+
+(defn- prompt-insert-line! [name prompt line-fn & [initial-input]]
+  (simple-prompt/simple-prompt
+    {:name name
+     :prompt prompt
+     :initial-input (or initial-input "")
+     :target-window (or *window* (focused-window))
+     :on-submit (fn [input]
+                  (let [input (str/trim input)]
+                    (when-not (str/blank? input)
+                      (insert-line-after-current! (line-fn input)))))}))
+
+(defn ^:interactive git-rebase-todo-exec []
+  (prompt-insert-line! :regit-rebase-exec "Exec command: " #(str "exec " %)))
+
+(defn ^:interactive git-rebase-todo-break []
+  (insert-line-after-current! "break"))
+
+(defn ^:interactive git-rebase-todo-undo []
+  (let [buf (todo-buffer)]
+    (buffer/with-override-read-only buf
+      (undo-command buf))))
+
+(defn ^:interactive git-rebase-todo-noop []
+  (insert-line-after-current! "noop"))
+
+(defn ^:interactive git-rebase-todo-label []
+  (prompt-insert-line! :regit-rebase-label "Label: " #(str "label " %)))
+
+(defn ^:interactive git-rebase-todo-reset []
+  (prompt-insert-line! :regit-rebase-reset "Reset to label: " #(str "reset " %)))
+
+(defn ^:interactive git-rebase-todo-update-ref []
+  (prompt-insert-line! :regit-rebase-update-ref "Update ref: " #(str "update-ref " %)))
+
+(defn ^:interactive git-rebase-todo-merge []
+  (prompt-insert-line! :regit-rebase-merge "Merge: " #(str "merge " %)))
+
+(defn ^:interactive git-rebase-todo-merge-toggle-editmsg []
+  (let [line (current-line-text)]
+    (cond
+      (str/starts-with? (or line "") "merge -C ")
+      (replace-current-line! (str "merge -c " (subs line (count "merge -C "))))
+
+      (str/starts-with? (or line "") "merge -c ")
+      (replace-current-line! (str "merge -C " (subs line (count "merge -c "))))
+
+      :else
+      (message "No merge action at point"))))
+
+(defn- move-current-line-by! [delta]
+  (let [line (current-todo-line)
+        lines (vec (todo-buffer-lines))
+        target (+ line delta)]
+    (when (and (>= line 0)
+            (< line (count lines))
+            (>= target 0)
+            (< target (count lines)))
+      (let [current (nth lines line)
+            without (vec (concat (subvec lines 0 line) (subvec lines (inc line))))
+            insert-at (if (pos? delta) target target)]
+        (set-buffer-lines!
+          (vec (concat (subvec without 0 insert-at) [current] (subvec without insert-at)))
+          target)))))
+
+(defn ^:interactive git-rebase-todo-move-up []
+  (move-current-line-by! -1))
+
+(defn ^:interactive git-rebase-todo-move-down []
+  (move-current-line-by! 1))
+
+(defn- close-todo-buffer! [return-window]
+  (close-buffer)
+  (when return-window
+    (set-focused-window return-window)))
+
+(defn ^:interactive git-rebase-todo-submit []
+  (let [state @(buffer-state)
+        root (:regit-root state)
+        todo-path (:todo-path state)
+        operation (:todo-operation state)
+        return-window (:return-window state)
+        content (buffer-display-string)
+        editor-script (use-todo-editor-script todo-path)
+        env {"GIT_SEQUENCE_EDITOR" (str "sh " editor-script)}
+        args (case operation
+               :edit-todo ["rebase" "--edit-todo"]
+               (:regit-rebase-command-args state))]
+    (write-file todo-path content)
+    (let [err (run-git-with-commit-editor! root "Rebase" env args
+                {:success-message "Rebase started"
+                 :start-window return-window})]
+      (when (or (not err) (rebase-in-progress? root))
+        (close-todo-buffer! return-window))
+      err)))
+
+(defn ^:interactive git-rebase-todo-abort []
+  (let [state @(buffer-state)
+        root (:regit-root state)
+        return-window (:return-window state)]
+    (when (rebase-in-progress? root)
+      (run-rebase-abort! root))
+    (close-todo-buffer! return-window)))
+
+(defn ^:interactive git-rebase-todo-show-commit []
+  (let [parsed (line-action (current-line-text))]
+    (if-let [commit (:target parsed)]
+      (let [source-window (todo-window)
+            source-buffer (todo-buffer)]
+        (when source-window
+          (set-focused-window source-window))
+        (binding [*buffer* source-buffer]
+          (call-var regit.view-commit/regit-view-commit commit)))
+      (message "No commit at point"))))
+
+(def git-rebase-todo-keymap (make-keymap))
+
+(map! :map git-rebase-todo-keymap
+  ("C-c C-c" #'git-rebase-todo-submit)
+  ("C-c C-k" #'git-rebase-todo-abort)
+  ("Z Z" #'git-rebase-todo-submit)
+  ("Z Q" #'git-rebase-todo-abort)
+  ("p" #'git-rebase-todo-pick)
+  ("r" #'git-rebase-todo-reword)
+  ("w" #'git-rebase-todo-reword)
+  ("e" #'git-rebase-todo-edit)
+  ("s" #'git-rebase-todo-squash)
+  ("f" #'git-rebase-todo-fixup)
+  ("d" #'git-rebase-todo-drop)
+  ("x" #'git-rebase-todo-exec)
+  ("b" #'git-rebase-todo-break)
+  ("u" #'git-rebase-todo-undo)
+  ("k" #'nav/cursor-up)
+  ("j" #'nav/cursor-down)
+  ("M-k" #'git-rebase-todo-move-up)
+  ("M-j" #'git-rebase-todo-move-down)
+  ("s-k" #'git-rebase-todo-move-up)
+  ("s-j" #'git-rebase-todo-move-down)
+  ("<enter>" #'git-rebase-todo-show-commit))
+
+(register-mode :git-rebase-todo
+  {:name :git-rebase-todo
+   :icon "󰊢 "
+   :vars {#'mode/*language* "bash"}
+   :keymaps [git-rebase-todo-keymap]
+   :submodes [:vim]})
+
+(defn run-rebase-onto! [root args-values target]
+  (if (str/blank? (or target ""))
+    "No target selected"
+    (let [args (rebase-command-args args-values [target] (:interactive args-values))]
+      (if (:interactive args-values)
+        (open-rebase-todo-buffer! root args (focused-window))
+        (run-git-with-commit-editor! root
+          "Rebase"
+          {}
+          args
+          {:success-message (str "Rebased onto " target)
+           :start-window (focused-window)})))))
+
+(defn run-rebase-interactive! [root args-values commit]
+  (let [base (commit-parent-target root commit)
+        suffix (:args base)
+        args (rebase-command-args args-values suffix true)]
+    (open-rebase-todo-buffer! root args (focused-window))))
+
+(defn- run-rebase-action! [root args-values commit action & [message]]
+  (let [base (commit-parent-target root commit)
+        args (rebase-command-args args-values (:args base) true)
+        editor-script (action-editor-script)
+        env (merge {"GIT_SEQUENCE_EDITOR" (str "sh " editor-script)
+                    "REGIT_REBASE_TARGET" commit
+                    "REGIT_REBASE_ACTION" action}
+              (when message
+                {"GIT_EDITOR" (str "sh " (message-editor-script))
+                 "REGIT_COMMIT_MESSAGE" message}))]
+    (if message
+      (run-git-env! root
+        "Rebase"
+        env
+        args
+        {:success-message "Rebase finished"
+         :start-window (focused-window)})
+      (run-git-with-commit-editor! root
+        "Rebase"
+        env
+        args
+        {:success-message "Rebase finished"
+         :start-window (focused-window)}))))
+
+(defn run-rebase-edit-commit! [root args-values commit]
+  (run-rebase-action! root args-values commit "edit"))
+
+(defn run-rebase-reword-commit! [root args-values commit]
+  (let [summary (get-git-output root "log" "-1" "--pretty=%s" commit)]
+    (simple-prompt/simple-prompt
+      {:name :regit-rebase-reword
+       :prompt "New commit message: "
+       :initial-input (or summary "")
+       :target-window (focused-window)
+       :on-submit (fn [input]
+                    (let [message (str/trim input)]
+                      (if (str/blank? message)
+                        (message "Commit message cannot be empty")
+                        (run-rebase-action! root args-values commit "reword" message))))})))
+
+(defn run-rebase-remove-commit! [root args-values commit]
+  (run-rebase-action! root args-values commit "drop"))
+
+(defn run-rebase-subset! [root args-values newbase start]
+  (let [args (rebase-command-args args-values ["--onto" newbase start] (:interactive args-values))]
+    (if (:interactive args-values)
+      (open-rebase-todo-buffer! root args (focused-window))
+      (run-git-with-commit-editor! root
+        "Rebase subset"
+        {}
+        args
+        {:success-message (str "Rebased subset onto " newbase)
+         :start-window (focused-window)}))))
+
+(defn- run-rebase-autosquash-from! [root args-values base]
+  (let [args-values (merge args-values {:autosquash true :keep-empty true})
+        args (rebase-command-args args-values [base] true)]
+    (run-git-with-commit-editor! root
+      "Autosquash rebase"
+      (true-editor-env)
+      args
+      {:success-message "Autosquash rebase finished"
+       :start-window (focused-window)})))
+
+(defn run-rebase-autosquash! [root args-values]
+  (let [upstream (upstream-target root)
+        base (when-not (str/blank? (or upstream ""))
+               (get-git-output root "merge-base" upstream "HEAD"))]
+    (if (str/blank? (or base ""))
+      (log-select/regit-log-select root
+        "Type C-c C-c on a commit to squash into it and then rebase as necessary, or C-c C-k to abort"
+        (fn [commit] (run-rebase-autosquash-from! root args-values commit))
+        {:return-window (focused-window)})
+      (run-rebase-autosquash-from! root args-values base))))
+
+(defn run-rebase-continue! [root]
+  (run-git-with-commit-editor! root
+    "Continue rebase"
+    {}
+    ["rebase" "--continue"]
+    {:success-message "Continued rebase"
+     :start-window (focused-window)}))
+
+(defn run-rebase-skip! [root]
+  (run-git! root
+    "Skip rebase commit"
+    ["rebase" "--skip"]
+    {:success-message "Skipped rebase commit"
+     :start-window (focused-window)}))
+
+(defn run-rebase-edit-todo! [root return-window]
+  (if (rebase-in-progress? root)
+    (open-existing-rebase-todo-buffer! root return-window)
+    "No rebase in progress"))
+
+(defn run-rebase-abort! [root]
+  (if (rebase-in-progress? root)
+    (run-git! root
+      "Abort rebase"
+      ["rebase" "--abort"]
+      {:success-message "Aborted rebase"
+       :start-window (focused-window)})
+    "No rebase in progress"))
+
+(defn- select-rebase-interactive [root args-values]
+  (log-select/regit-log-select root
+    "Type C-c C-c on a commit to rebase it and all commits above it, or C-c C-k to abort"
+    (fn [commit] (run-rebase-interactive! root args-values commit))
+    {:return-window (focused-window)}))
+
+(defn- select-rebase-subset [root args-values]
+  (select-target "Rebase subset onto:" (rebase-targets root)
+    (fn [newbase]
+      (log-select/regit-log-select root
+        (str "Type C-c C-c on a commit to rebase it and commits above it onto " newbase ", or C-c C-k to abort")
+        (fn [commit] (run-rebase-subset! root args-values newbase (str commit "^")))
+        {:return-window (focused-window)}))))
+
+(defn- select-rebase-single-commit [root args-values message action-fn]
+  (log-select/regit-log-select root
+    message
+    (fn [commit] (action-fn root args-values commit))
+    {:return-window (focused-window)}))
+
+(defn- command-args []
+  {:keep-empty {:label "-k Keep empty commits (--keep-empty)"
+                :key "- k"
+                :value false}
+   :rebase-merges {:description "Rebase merges"
+                   :key-label "-r"
+                   :key "- r"
+                   :argument "--rebase-merges="
+                   :prompt "Rebase merges:"
+                   :choices rebase-merges-modes
+                   :value nil}
+   :update-refs {:label "-u Update branches (--update-refs)"
+                 :key "- u"
+                 :value false}
+   :committer-date-is-author-date {:label "-d Use author date as committer date (--committer-date-is-author-date)"
+                                   :key "- d"
+                                   :value false
+                                   :incompatible [:ignore-date]}
+   :ignore-date {:label "-t Use current time as author date (--ignore-date)"
+                 :key "- t"
+                 :value false
+                 :incompatible [:committer-date-is-author-date]}
+   :autosquash {:label "-a Autosquash (--autosquash)"
+                :key "- a"
+                :value false}
+   :autostash {:label "-A Autostash (--autostash)"
+               :key "- A"
+               :value true}
+   :interactive {:label "-i Interactive (--interactive)"
+                 :key "- i"
+                 :value false}
+   :no-verify {:label "-h Disable hooks (--no-verify)"
+               :key "- h"
+               :value false}})
+
+(defn- rebase-actions [root _return-window]
+  {"p" {:label (or (push-remote-target root) "push remote")
+        :fn (fn [args]
+              (if-let [target (push-remote-target root)]
+                (run-rebase-onto! root args target)
+                (select-target "Rebase onto push remote:" (rebase-targets root)
+                  (fn [target] (run-rebase-onto! root args target)))))}
+   "u" {:label (or (upstream-target root) "upstream")
+        :fn (fn [args]
+              (if-let [target (upstream-target root)]
+                (run-rebase-onto! root args target)
+                (select-target "Rebase onto upstream:" (rebase-targets root)
+                  (fn [target] (run-rebase-onto! root args target)))))}
+   "e" {:label "elsewhere"
+        :fn (fn [args]
+              (select-target "Rebase onto:" (rebase-targets root)
+                (fn [target] (run-rebase-onto! root args target))))}
+   "i" {:label "interactively"
+        :fn (fn [args] (select-rebase-interactive root args))}
+   "s" {:label "a subset"
+        :fn (fn [args] (select-rebase-subset root args))}
+   "m" {:label "to modify a commit"
+        :fn (fn [args]
+              (select-rebase-single-commit root args
+                "Type C-c C-c on a commit to edit it, or C-c C-k to abort"
+                #'run-rebase-edit-commit!))}
+   "w" {:label "to reword a commit"
+        :fn (fn [args]
+              (select-rebase-single-commit root args
+                "Type C-c C-c on a commit to reword its message, or C-c C-k to abort"
+                #'run-rebase-reword-commit!))}
+   "k" {:label "to remove a commit"
+        :fn (fn [args]
+              (select-rebase-single-commit root args
+                "Type C-c C-c on a commit to remove it, or C-c C-k to abort"
+                #'run-rebase-remove-commit!))}
+   "f" {:label "to autosquash"
+        :fn (fn [args] (run-rebase-autosquash! root args))}})
+
+(defn- rebase-layout [root]
+  ["Arguments"
+   {:arg :keep-empty}
+   {:arg :rebase-merges}
+   {:arg :update-refs}
+   {:arg :committer-date-is-author-date}
+   {:arg :ignore-date}
+   {:arg :autosquash}
+   {:arg :autostash}
+   {:arg :interactive}
+   {:arg :no-verify}
+   ""
+   {:section (str "Rebase " (or (current-branch root) "HEAD") " onto")
+    :columns 3
+    :items [{:action "p"}
+            {:action "u"}
+            {:action "e"}]}
+   ""
+   {:section "Rebase"
+    :columns 3
+    :items [{:action "i"}
+            {:action "s"}
+            {:action "m"}
+            {:action "w"}
+            {:action "k"}
+            {:action "f"}]}])
+
+(defn- rebase-in-progress-actions [root return-window]
+  {"r" {:label "Continue"
+        :fn (fn [_args] (run-rebase-continue! root))}
+   "s" {:label "Skip"
+        :fn (fn [_args] (run-rebase-skip! root))}
+   "e" {:label "Edit"
+        :fn (fn [_args] (run-rebase-edit-todo! root return-window))}
+   "a" {:label "Abort"
+        :fn (fn [_args] (run-rebase-abort! root))}})
+
+(defn- short-ref-name [root rev fallback]
+  (or (when-not (str/blank? (or rev ""))
+        (get-git-output root "name-rev" "--name-only" "--no-undefined" rev))
+    (cond
+      (str/starts-with? (or fallback "") "refs/heads/") (subs fallback (count "refs/heads/"))
+      (str/starts-with? (or fallback "") "refs/remotes/") (subs fallback (count "refs/remotes/"))
+      :else fallback)
+    rev))
+
+(defn- step-text [kind line]
+  (let [[_ action target trailer] (re-find #"^(\S+)\s+(\S+)\s*(.*)$" (or line ""))]
+    (if action
+      (str (theme/with-face kind :regit-header)
+        " "
+        (theme/with-face target :regit-hash)
+        (when-not (str/blank? (or trailer ""))
+          (str " " trailer)))
+      (str (theme/with-face kind :regit-header) " " line))))
+
+(defn rebase-status [root]
+  (when (rebase-in-progress? root)
+    (let [head-name (read-state-file root "head-name")
+          onto (read-state-file root "onto")
+          name-label (short-ref-name root head-name head-name)
+          onto-label (short-ref-name root onto onto)
+          todo-lines (read-state-lines root "git-rebase-todo")
+          done-lines (read-state-lines root "done")
+          stopped-sha (read-state-file root "stopped-sha")
+          stopped-line (when-not (str/blank? (or stopped-sha ""))
+                         (or (get-git-output root "log" "-1" "--format=%h %s" stopped-sha)
+                           stopped-sha))
+          steps (vec (concat
+                       (mapv #(hash-map :text (step-text "pick" %)) (reverse todo-lines))
+                       (when stopped-line
+                         [{:text (step-text "stop" stopped-line)}])
+                       (mapv #(hash-map :text (step-text "done" %)) (reverse done-lines))
+                       [{:text (str (theme/with-face "onto" :regit-header)
+                                 " "
+                                 (theme/with-face (or onto-label "") :regit-branch))}]))]
+      {:heading (str "Rebasing " (or name-label "HEAD") " onto " (or onto-label ""))
+       :steps steps})))
+
+(defn ^:interactive regit-rebase [& [root]]
+  (if-let [root (or root (project/current-project-root))]
+    (let [return-window (focused-window)]
+      (if (rebase-in-progress? root)
+        (regit-command
+          {:args {}
+           :return-window return-window
+           :actions (rebase-in-progress-actions root return-window)
+           :layout [{:section "Actions"
+                     :columns 3
+                     :items [{:action "r"}
+                             {:action "s"}
+                             {:action "e"}
+                             {:action "a"}]}]})
+        (regit-command
+          {:args (command-args)
+           :return-window return-window
+           :actions (rebase-actions root return-window)
+           :layout (rebase-layout root)})))
+    (message "Not in a git repository")))

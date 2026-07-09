@@ -1,0 +1,367 @@
+(ns regit.tests.stash
+  (:require [regit.stash :as stash]
+            [regit.status :as status]
+            [rex.base.buffer :as buffer]
+            [rex.base.keys :as keys]
+            [regit.command :as regit-command]
+            [rex.string :as str]
+            [rex.ui.simple-prompt :as simple-prompt]
+            [rex.test :as test :refer [deftest is=]]))
+
+(defn- git [root & args]
+  (run-shell* "git" (into ["-C" (str root)] args)))
+
+(defn- git! [root & args]
+  (let [result (apply git root args)]
+    (test/assert (zero? (:code result))
+      (str "git command failed: " args "\n" (:err result) (:out result)))
+    result))
+
+(defn- git-out [root & args]
+  (str/trim (:out (apply git! root args))))
+
+(defn- git-status-short [root]
+  (:out (git! root "status" "--short")))
+
+(defn- init-test-repo [name]
+  (let [tmp-dir (temp-file-path name)
+        _ (run-shell* "rm" ["-rf" tmp-dir])
+        _ (run-shell* "mkdir" [tmp-dir])
+        _ (git! tmp-dir "init")
+        _ (git! tmp-dir "config" "user.name" "Rex Test")
+        _ (git! tmp-dir "config" "user.email" "rex@example.com")
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "line 1\nline 2\n")
+        _ (git! tmp-dir "add" "test.txt")
+        _ (git! tmp-dir "commit" "-m" "initial")
+        _ (git! tmp-dir "branch" "-M" "main")]
+    tmp-dir))
+
+(defn- cleanup [root]
+  (run-shell* "rm" ["-rf" root]))
+
+(defn- command-window []
+  (let [ui-win (minibuffer-ui-window)]
+    (test/assert ui-win "regit command UI not open")
+    ui-win))
+
+(defn- command-buffer []
+  (window-buffer (command-window)))
+
+(defn- buffer-content [buf]
+  (with-read-lock [lock (buffer-text buf)]
+    (buffer/slice lock 0 (buffer/len-chars lock))))
+
+(defn- command-text []
+  (str/strip-properties (buffer-content (command-buffer))))
+
+(defn- command-state []
+  (let [ui-buf (command-buffer)]
+    (binding [*buffer* ui-buf]
+      @regit-command/*state*)))
+
+(defn- command-for [key]
+  (let [ui-win (command-window)
+        ui-buf (window-buffer ui-win)
+        cmd (binding [*window* ui-win
+                      *buffer* ui-buf]
+              (regit-command/regit-command-keymap (keys/parse-key-sequence key)))]
+    (when cmd
+      (fn []
+        (binding [*window* ui-win
+                  *buffer* ui-buf]
+          (cmd))))))
+
+(defn- invoke-command-key! [key]
+  (let [cmd (command-for key)]
+    (test/assert (ifn? cmd) (str "missing regit stash command key " key))
+    (cmd)))
+
+(defn- with-focused-window [f]
+  (let [win (focused-window)
+        buf (window-buffer win)]
+    (binding [*window* win
+              *buffer* buf]
+      (f))))
+
+(defn- invoke-focused! [f]
+  (with-focused-window f))
+
+(defn- submit-simple-prompt! [input]
+  (let [mb-win (minibuffer-window)]
+    (test/assert mb-win "simple-prompt minibuffer not opened")
+    (binding [*window* mb-win
+              *buffer* (window-buffer mb-win)]
+      (simple-prompt/set-input! input)
+      (simple-prompt/simple-prompt-submit))))
+
+(defn- open-status! [root]
+  (status/regit-status root)
+  (focused-window))
+
+(defn- focused-buffer-content []
+  (buffer-content (window-buffer (focused-window))))
+
+(defn- focused-display-content []
+  (str/strip-properties (focused-buffer-content)))
+
+(defn- focused-mode []
+  (let [win (focused-window)
+        buf (window-buffer win)]
+    (binding [*window* win
+              *buffer* buf]
+      *mode*)))
+
+(defn- find-line [content needle]
+  (first (remove nil?
+           (map-indexed (fn [idx line]
+                          (when (str/includes? line needle)
+                            idx))
+             (str/split-lines content)))))
+
+(defn- move-focused-line! [line]
+  (let [win (focused-window)
+        buf (window-buffer win)]
+    (binding [*window* win
+              *buffer* buf]
+      (move-cursor (with-read-lock [lock (buffer-text buf)]
+                     (buffer/line-to-char lock line))
+        false win))))
+
+(defn- move-focused-line-containing! [needle]
+  (let [line (find-line (focused-display-content) needle)]
+    (test/assert line (str "Could not find line containing " needle " in:\n" (focused-display-content)))
+    (move-focused-line! line)
+    line))
+
+(defn- open-stash-command-at-status-stash! [root stash-message]
+  (open-status! root)
+  (move-focused-line-containing! stash-message)
+  (invoke-focused! #'stash/regit-stash))
+
+(defn- invoke-stash-action-at-status-stash! [root stash-message key]
+  (open-stash-command-at-status-stash! root stash-message)
+  (invoke-command-key! key))
+
+(defn- make-stash! [root message content]
+  (write-file (path-join root "test.txt") content)
+  (git! root "stash" "push" "-m" message)
+  (is= "" (git-status-short root)))
+
+(defn- stash-count [root]
+  (count (git-stashes root)))
+
+(defn- current-branch [root]
+  (git-out root "rev-parse" "--abbrev-ref" "HEAD"))
+
+(defn- patch-name-for-stash [root stash-id]
+  (git-out root "log" "-1" "--format=0001-%f.patch" stash-id))
+
+(deftest regit-stash-command-layout-and-bindings-test
+  (let [tmp-dir (init-test-repo "regit-stash-command-layout")]
+    (try
+      (open-status! tmp-dir)
+      (invoke-focused! #'stash/regit-stash)
+      (let [st (command-state)
+            text (command-text)]
+        (doseq [key ["z" "i" "w" "x"
+                     "Z" "I" "W" "r"
+                     "a" "p" "k"
+                     "l" "v"
+                     "b" "B" "f"]]
+          (test/assert (contains? (:actions st) key) (str "missing stash action " key)))
+        (is= "- u" (get-in st [:args "u" :key]))
+        (is= "-u" (get-in st [:args "u" :key-label]))
+        (is= "--include-untracked" (get-in st [:args "u" :argument]))
+        (is= "- a" (get-in st [:args "a" :key]))
+        (is= "-a" (get-in st [:args "a" :key-label]))
+        (is= "--all" (get-in st [:args "a" :argument]))
+        (doseq [needle ["Arguments"
+                        "-u Also save untracked files (--include-untracked)"
+                        "-a Also save untracked and ignored files (--all)"
+                        "Stash"
+                        "Snapshot"
+                        "Use"
+                        "Inspect"
+                        "Transform"
+                        "z both"
+                        "x keeping index"
+                        "r to wip ref"
+                        "a Apply"
+                        "p Pop"
+                        "k Drop"
+                        "l List"
+                        "v Show"
+                        "b Branch"
+                        "B Branch here"
+                        "f Format patch"]]
+          (test/assert (str/includes? text needle)
+            (str "stash command missing " needle "\nGot:\n" text))))
+      (invoke-command-key! "- u")
+      (test/assert (get-in (command-state) [:args "u" :value]) "u argument should be enabled")
+      (invoke-command-key! "- a")
+      (test/assert (get-in (command-state) [:args "a" :value]) "a argument should be enabled")
+      (test/assert (not (get-in (command-state) [:args "u" :value]))
+        "a argument should disable incompatible u argument")
+      (let [text (command-text)]
+        (test/assert (str/includes? text "-a Also save untracked and ignored files (--all)")
+          (str "enabled -a argument should keep the --all label:\n" text))
+        (test/assert (not (str/includes? text "--alltrue"))
+          (str "enabled -a argument should not append true:\n" text)))
+      (finally
+        (cleanup tmp-dir)))))
+
+(deftest regit-stash-create-both-with-untracked-test
+  (let [tmp-dir (init-test-repo "regit-stash-create-both")
+        file-path (path-join tmp-dir "test.txt")
+        untracked-path (path-join tmp-dir "new.txt")]
+    (try
+      (write-file file-path "changed\nline 2\n")
+      (write-file untracked-path "new\n")
+      (open-status! tmp-dir)
+      (invoke-focused! #'stash/regit-stash)
+      (invoke-command-key! "- u")
+      (invoke-command-key! "z")
+      (submit-simple-prompt! "both message")
+      (is= 1 (stash-count tmp-dir))
+      (is= "" (git-status-short tmp-dir))
+      (test/assert (not (path-exists? untracked-path)) "untracked file should have been stashed")
+      (test/assert (str/includes? (:message (first (git-stashes tmp-dir))) "both message")
+        "stash message should include submitted message")
+      (finally
+        (cleanup tmp-dir)))))
+
+(deftest regit-stash-worktree-keeps-index-test
+  (let [tmp-dir (init-test-repo "regit-stash-worktree-keeps-index")
+        file-path (path-join tmp-dir "test.txt")]
+    (try
+      (write-file file-path "staged\nline 2\n")
+      (git! tmp-dir "add" "test.txt")
+      (write-file file-path "staged\nunstaged\n")
+      (open-status! tmp-dir)
+      (invoke-focused! #'stash/regit-stash)
+      (invoke-command-key! "w")
+      (submit-simple-prompt! "worktree only")
+      (is= 1 (stash-count tmp-dir))
+      (is= "M  test.txt\n" (git-status-short tmp-dir))
+      (is= "staged\nline 2\n" (read-file file-path))
+      (finally
+        (cleanup tmp-dir)))))
+
+(deftest regit-stash-snapshot-leaves-worktree-test
+  (let [tmp-dir (init-test-repo "regit-stash-snapshot")
+        file-path (path-join tmp-dir "test.txt")]
+    (try
+      (write-file file-path "snapshot\nline 2\n")
+      (open-status! tmp-dir)
+      (invoke-focused! #'stash/regit-stash)
+      (invoke-command-key! "Z")
+      (is= 1 (stash-count tmp-dir))
+      (is= " M test.txt\n" (git-status-short tmp-dir))
+      (is= "snapshot\nline 2\n" (read-file file-path))
+      (test/assert (str/includes? (:message (first (git-stashes tmp-dir))) "WIP on main")
+        "snapshot stash should use WIP message")
+      (finally
+        (cleanup tmp-dir)))))
+
+(deftest regit-stash-list-show-format-and-drop-context-test
+  (let [tmp-dir (init-test-repo "regit-stash-context-inspect")]
+    (try
+      (make-stash! tmp-dir "context stash" "context\nline 2\n")
+      (open-status! tmp-dir)
+      (invoke-focused! #'stash/regit-stash)
+      (invoke-command-key! "l")
+      (test/assert (str/includes? (:name (window-buffer (focused-window))) "*regit-stashes:")
+        "List action should open a regit stashes buffer")
+      (test/assert (str/includes? (focused-display-content) "context stash")
+        "stashes list should include the stash message")
+
+      (invoke-stash-action-at-status-stash! tmp-dir "context stash" "v")
+      (is= :regit-view-stash (focused-mode))
+      (test/assert (str/includes? (focused-display-content) "context stash")
+        "Show action should open the stash view for the stash at point")
+
+      (let [patch-name (patch-name-for-stash tmp-dir "stash@{0}")
+            patch-path (path-join tmp-dir patch-name)]
+        (invoke-stash-action-at-status-stash! tmp-dir "context stash" "f")
+        (test/assert (path-exists? patch-path) (str "format patch did not create " patch-name))
+        (test/assert (str/includes? (read-file patch-path) "context")
+          "format patch should include stash diff content"))
+
+      (invoke-stash-action-at-status-stash! tmp-dir "context stash" "k")
+      (is= 0 (stash-count tmp-dir))
+      (finally
+        (cleanup tmp-dir)))))
+
+(deftest regit-stash-apply-and-pop-context-test
+  (let [apply-root (init-test-repo "regit-stash-apply-context")
+        pop-root (init-test-repo "regit-stash-pop-context")]
+    (try
+      (make-stash! apply-root "apply stash" "apply\nline 2\n")
+      (invoke-stash-action-at-status-stash! apply-root "apply stash" "a")
+      (is= "apply\nline 2\n" (read-file (path-join apply-root "test.txt")))
+      (is= 1 (stash-count apply-root))
+
+      (make-stash! pop-root "pop stash" "pop\nline 2\n")
+      (invoke-stash-action-at-status-stash! pop-root "pop stash" "p")
+      (is= "pop\nline 2\n" (read-file (path-join pop-root "test.txt")))
+      (is= 0 (stash-count pop-root))
+      (finally
+        (cleanup apply-root)
+        (cleanup pop-root)))))
+
+(deftest regit-stash-branch-actions-context-test
+  (let [branch-root (init-test-repo "regit-stash-branch-context")
+        branch-here-root (init-test-repo "regit-stash-branch-here-context")]
+    (try
+      (make-stash! branch-root "branch stash" "branch\nline 2\n")
+      (invoke-stash-action-at-status-stash! branch-root "branch stash" "b")
+      (submit-simple-prompt! "from-stash")
+      (is= "from-stash" (current-branch branch-root))
+      (is= "branch\nline 2\n" (read-file (path-join branch-root "test.txt")))
+      (is= 0 (stash-count branch-root))
+
+      (make-stash! branch-here-root "branch here stash" "branch here\nline 2\n")
+      (invoke-stash-action-at-status-stash! branch-here-root "branch here stash" "B")
+      (submit-simple-prompt! "here-stash")
+      (is= "here-stash" (current-branch branch-here-root))
+      (is= "branch here\nline 2\n" (read-file (path-join branch-here-root "test.txt")))
+      (is= 1 (stash-count branch-here-root))
+      (finally
+        (cleanup branch-root)
+        (cleanup branch-here-root)))))
+
+(deftest regit-stash-wip-ref-test
+  (let [tmp-dir (init-test-repo "regit-stash-wip-ref")
+        file-path (path-join tmp-dir "test.txt")]
+    (try
+      (write-file file-path "wip staged\nline 2\n")
+      (git! tmp-dir "add" "test.txt")
+      (write-file file-path "wip staged\nwip unstaged\n")
+      (open-status! tmp-dir)
+      (invoke-focused! #'stash/regit-stash)
+      (invoke-command-key! "r")
+      (git! tmp-dir "rev-parse" "--verify" "refs/wip/index/refs/heads/main")
+      (git! tmp-dir "rev-parse" "--verify" "refs/wip/wtree/refs/heads/main")
+      (is= "MM test.txt\n" (git-status-short tmp-dir))
+      (finally
+        (cleanup tmp-dir)))))
+
+(deftest regit-status-apply-stash-staged-test
+  (let [tmp-dir (init-test-repo "regit-apply-stash-staged-test")
+        file-path (path-join tmp-dir "test.txt")]
+    (try
+      (write-file file-path "line 1 modified\nline 2\n")
+      (git! tmp-dir "add" "test.txt")
+      (write-file file-path "line 1 modified\nline 2 modified\n")
+      (git! tmp-dir "stash" "push" "-m" "mixed stash")
+      (open-status! tmp-dir)
+      (move-focused-line-containing! "mixed stash")
+      (invoke-focused! (fn [] (call-var regit.status/regit-status-apply)))
+      (let [text (focused-display-content)]
+        (test/assert (str/includes? text "Staged changes (1)")
+          (str "Staged changes section not found or empty after apply. Got:\n" text))
+        (test/assert (str/includes? text "Unstaged changes (1)")
+          (str "Unstaged changes section not found or empty after apply. Got:\n" text)))
+      (finally
+        (cleanup tmp-dir)))))

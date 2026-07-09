@@ -1,0 +1,107 @@
+(ns regit.tests.push
+  (:require [regit.push :as push]
+            [rex.base.buffer :as buffer]
+            [rex.base.frame :as frame]
+            [rex.base.keys :as keys]
+            [rex.base.project :as project]
+            [rex.base.theme :as theme]
+            [regit.command :as regit-command]
+            [rex.string :as str]
+            [rex.util :as util]
+            [rex.test :as test :refer [deftest is= is-error]]))
+(deftest regit-push-test
+  (theme/load-theme :catppuccin-frappe)
+  (let [user-rex (str (util/library-path 'rex.user))]
+    (open-file user-rex)
+    (let [focused-before (focused-window)
+          root (project/current-project-root)]
+      (test/assert root "regit-push test missing git root")
+      (let [branch (push/current-branch root)
+            push-remote (push/get-push-remote root branch)
+            upstream (push/get-upstream root branch)
+            push-label (or push-remote "pushRemote")
+            upstream-label (or upstream "upstream")
+            elsewhere-label "elsewhere"]
+        (push/regit-push)
+        (let [ui-win (minibuffer-ui-window)]
+          (test/assert ui-win "minibuffer-ui-window not opened")
+          (let [ui-buf (window-buffer ui-win)]
+            (binding [*buffer* ui-buf
+                      *window* ui-win
+                      *mode* :regit-command
+                      *submodes* #{}]
+              (let [get-ui-text (fn []
+                                  (with-read-lock [lock (buffer-text)]
+                                    (buffer/slice lock 0 (buffer/len-chars lock))))
+                    ensure-contains (fn [text needle]
+                                      (test/assert (str/index-of text needle) (str "expected text to contain: " needle)))
+                    get-f-color (fn []
+                                  (let [full-text (get-ui-text)
+                                        pos (str/index-of full-text "--force-with-lease")]
+                                    (test/assert pos "could not find '--force-with-lease' in text")
+                                    (let [props (buffer/property-at pos)]
+                                      (test/assert (not (empty? props)) (str "no properties at position " pos))
+                                      (get (style->map (first props)) :fg))))]
+                (is= ui-win (focused-window))
+                (let [st @regit-command/*state*]
+                  (test/assert st "regit-command state not initialized")
+                  (is= "- f" (get-in st [:args :force-with-lease :key]))
+                  (test/assert (not (get-in st [:args :force-with-lease :value])))
+                  (test/assert (contains? (:actions st) "p"))
+                  (test/assert (contains? (:actions st) "u"))
+                  (test/assert (contains? (:actions st) "e")))
+
+                (let [text (get-ui-text)]
+                  (ensure-contains text "Arguments")
+                  (ensure-contains text (str "Push " branch " to"))
+                  (ensure-contains text push-label)
+                  (ensure-contains text upstream-label)
+                  (ensure-contains text elsewhere-label)
+                  (ensure-contains text "-f")
+                  (ensure-contains text "--force-with-lease"))
+
+                (let [push-cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "p"))
+                      upstream-cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "u"))
+                      elsewhere-cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "e"))
+                      close-cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "q"))]
+                  (test/assert (ifn? push-cmd) "could not find action command for 'p'")
+                  (test/assert (ifn? upstream-cmd) "could not find action command for 'u'")
+                  (test/assert (ifn? elsewhere-cmd) "could not find action command for 'e'")
+                  (test/assert (ifn? close-cmd) "could not find close command for 'q'")
+
+                  (let [initial-color (get-f-color)
+                        initial-value (get-in @regit-command/*state* [:args :force-with-lease :value])]
+                    ;; Toggle using key events: "-" then "f"
+                    (let [dash (first (keys/parse-key-sequence "-"))
+                          f-key (first (keys/parse-key-sequence "f"))]
+                      (frame/process-key-event dash)
+                      (frame/process-key-event f-key))
+                    (is= (not initial-value)
+                      (get-in @regit-command/*state* [:args :force-with-lease :value]))
+
+                    (let [new-color (get-f-color)]
+                      (test/assert (not= initial-color new-color) (str "color did not change after toggle: " initial-color)))
+
+                    ;; Toggle back using key events
+                    (let [dash (first (keys/parse-key-sequence "-"))
+                          f-key (first (keys/parse-key-sequence "f"))]
+                      (frame/process-key-event dash)
+                      (frame/process-key-event f-key))
+                    (is= initial-value (get-in @regit-command/*state* [:args :force-with-lease :value]))
+                    (is= initial-color (get-f-color)))
+
+                  ;; Cleanup
+                  (close-cmd))))))
+
+        (is= focused-before (focused-window))
+        (let [target-win (focused-window)
+              target-buf (window-buffer target-win)
+              seq (keys/parse-key-sequence "<down>")
+              cmd (keys/lookup-keys seq)
+              initial-pos (cursor-position target-win)]
+          (test/assert (ifn? cmd) "could not find command for '<down>'")
+          (binding [*window* target-win
+                    *buffer* target-buf]
+            (keys/run-key-command cmd seq))
+          (let [new-pos (cursor-position target-win)]
+            (test/assert (not= initial-pos new-pos) "cursor did not move after '<down>'")))))))

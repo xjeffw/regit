@@ -1,0 +1,199 @@
+(ns regit.log-select
+  (:require [rex.base.mode :as mode]
+            [rex.base.buffer :as buffer]
+            [rex.base.frame :as frame]
+            [rex.base.keys :refer [make-keymap map!]]
+            [rex.base.window :as window]
+            [rex.base.theme :as theme]
+            [rex.string :as str]
+            [rex.util :as util])
+  (:use rex.core rex.builtins))
+
+(def log-select-limit 256)
+
+(defn- git-cmd [root & args]
+  (run-shell* "git" (into ["-C" (str root)] args)))
+
+(defn- get-git-output [root & args]
+  (let [result (apply git-cmd root args)]
+    (when (zero? (:code result))
+      (str/trim (:out result)))))
+
+(defn- repo-name [root]
+  (or (path-filename root) root))
+
+(defn- header-text [text]
+  (theme/with-face text :regit-header))
+
+(defn- branch-text [text]
+  (theme/with-face text :regit-branch))
+
+(defn- ref-text [text]
+  (theme/with-face text :regit-ref))
+
+(defn- parse-commits [rendered]
+  (if (str/blank? (or rendered ""))
+    []
+    (->> (str/split rendered #"\u001e")
+      (map str/trim)
+      (remove str/blank?)
+      (mapv (fn [record]
+              (let [parts (str/split record #"\u001f")]
+                {:id (nth parts 0 "")
+                 :refs (let [refs (nth parts 1 "")]
+                         (if (str/blank? refs)
+                           []
+                           (mapv str/trim (str/split refs #","))))
+                 :summary (nth parts 2 "")
+                 :author (nth parts 3 "")
+                 :date (let [date (nth parts 4 "0")]
+                         (if (str/blank? date)
+                           0
+                           (read-string date)))}))))))
+
+(defn- symbolic-head? [ref]
+  (or (= ref "HEAD")
+    (str/ends-with? ref "/HEAD")))
+
+(defn- render-ref [ref]
+  (cond
+    (str/includes? ref " -> ")
+    (let [[source target] (str/split ref #" -> " 2)]
+      (str
+        (if (symbolic-head? source)
+          (ref-text source)
+          (branch-text source))
+        (ref-text " -> ")
+        (branch-text target)))
+
+    (str/includes? ref ": ")
+    (let [[label value] (str/split ref #": " 2)]
+      (str (ref-text (str label ": ")) (ref-text value)))
+
+    (symbolic-head? ref) (ref-text ref)
+    :else (branch-text ref)))
+
+(defn- render-refs [refs]
+  (when (seq refs)
+    (str
+      (ref-text "[")
+      (str/join (ref-text ", ") (mapv render-ref refs))
+      (ref-text "] "))))
+
+(defn- commit-line [commit]
+  (str
+    (theme/with-face (:id commit) :dimmed)
+    " * "
+    (or (render-refs (:refs commit)) "")
+    (:summary commit)))
+
+(defn- log-select-buffer-name [root]
+  (str "*regit-log-select: " (repo-name root) "*"))
+
+(defn- log-select-buffer-label [root]
+  (str (theme/with-face "regit-log-select: " :special-buffer)
+    (branch-text (repo-name root))))
+
+(defn- load-commits [root target]
+  (parse-commits
+    (get-git-output root
+      "log"
+      (or target "HEAD")
+      "--decorate=short"
+      "--format=%h%x1f%D%x1f%s%x1f%an%x1f%ct%x1e"
+      (str "-n" log-select-limit))))
+
+(defn- render-log-select-buffer! [buf root message target]
+  (let [commits (load-commits root target)
+        lines (if (seq commits)
+                (mapv commit-line commits)
+                ["  (no commits)"])
+        content (str/join "\n" (into [(header-text message)] lines))]
+    (set-buffer-read-only false buf)
+    (binding [*buffer* buf]
+      (set-string content buf)
+      (clear-line-overlay :regit-log-select-info buf)
+      (doseq [idx (range (count commits))]
+        (let [commit (nth commits idx)
+              line (inc idx)
+              text (str (theme/with-face (:author commit) :regit-author)
+                     " "
+                     (theme/with-face (str/left-pad (util/format-relative-time (:date commit)) 12) :regit-date))]
+          (add-line-overlay-span :regit-log-select-info line (inc line)
+            {:text text :alignment :right :offset 2}
+            buf))))
+    (set-buffer-read-only true buf)))
+
+(defn commit-id-at-line [line & [buf]]
+  (let [buf (or buf *buffer*)]
+    (with-read-lock [lock (buffer-text buf)]
+      (when (and (>= line 0)
+              (< line (buffer/len-lines lock)))
+        (second (re-find #"^([0-9a-f]{7,40})" (buffer/text-line lock line)))))))
+
+(defn ^:interactive regit-log-select-pick []
+  (let [state @(buffer-state)
+        commit-id (commit-id-at-line (current-line))
+        pick-fn (:pick-fn state)
+        return-window (:return-window state)]
+    (if commit-id
+      (do
+        (close-buffer)
+        (when return-window
+          (set-focused-window return-window))
+        (pick-fn commit-id))
+      (message "No commit at point"))))
+
+(defn ^:interactive regit-log-select-quit []
+  (let [state @(buffer-state)
+        quit-fn (:quit-fn state)
+        return-window (:return-window state)]
+    (close-buffer)
+    (when return-window
+      (set-focused-window return-window))
+    (when quit-fn
+      (quit-fn))))
+
+(def regit-log-select-keymap (make-keymap))
+
+(map! :map regit-log-select-keymap
+  ("C-c C-c" #'regit-log-select-pick)
+  ("." #'regit-log-select-pick)
+  ("e" #'regit-log-select-pick)
+  ("C-c C-k" #'regit-log-select-quit)
+  ("q" #'regit-log-select-quit))
+
+(mode/register-mode :regit-log-select
+  {:name :regit-log-select
+   :icon "󰊢 "
+   :keymaps [regit-log-select-keymap]
+   :submodes [:hl-line :vim]})
+
+(defn regit-log-select
+  [root message pick-fn & [opts]]
+  (let [root (str root)
+        opts (or opts {})
+        target (or (:target opts) (try (git-current-branch root) (catch _ "HEAD")))
+        return-window (or (:return-window opts) (focused-window))
+        window (or return-window (focused-window))
+        buffer (create-buffer true)]
+    (frame/with-render-coalescing
+      (set-buffer-name (log-select-buffer-name root) buffer)
+      (swap! (buffer-state buffer) assoc
+        :project-root root
+        :regit-root root
+        :regit-log-select-target target
+        :message message
+        :pick-fn pick-fn
+        :quit-fn (:quit-fn opts)
+        :return-window return-window
+        :label (log-select-buffer-label root))
+      (set-window-buffer buffer window)
+      (set-focused-window window)
+      (binding [*buffer* buffer
+                *window* window]
+        (mode/activate-mode :regit-log-select)
+        (render-log-select-buffer! buffer root message target)
+        (move-cursor 0 false window)
+        (set-scroll-offset 0 window)))
+    buffer))

@@ -1,0 +1,342 @@
+(ns regit.preview
+  (:require [rex.base.buffer :as buffer]
+            [rex.base.frame :as frame]
+            [rex.base.hook :refer [add-hook!]]
+            [regit.diff :as regit-diff])
+  (:use rex.core rex.builtins))
+
+(defonce regit-preview-on-focus true)
+(defonce regit-preview-delay-ms 0)
+
+(defonce *before-create-preview-buffer-hook* nil)
+(defonce *after-set-preview-buffer-hook* nil)
+
+(defn- source-window-valid? [source-buffer source-window]
+  (and source-window
+    (window-frame source-window)
+    (= (:id source-buffer) (:id (window-buffer source-window)))))
+
+(defn- preview-current? [source-buffer token]
+  (= token (:token (:regit-preview @(buffer-state source-buffer)))))
+
+(defn- selected-target-matches? [source-buffer source-window selected-target-fn target]
+  (try
+    (and (source-window-valid? source-buffer source-window)
+      (= target
+        (binding [*buffer* source-buffer
+                  *window* source-window]
+          (selected-target-fn))))
+    (catch _ false)))
+
+(defn- buffer-listed? [buffer & [attempt]]
+  (when buffer
+    (try
+      (some #(= (:id %) (:id buffer)) (list-buffers))
+      (catch _
+        (if (< (or attempt 0) 3)
+          (do
+            (sleep (ms->duration 10))
+            (buffer-listed? buffer (+ (or attempt 0) 1)))
+          false)))))
+
+(defn- close-preview-buffer! [preview-buffer source-window preview-window]
+  (when preview-buffer
+    (let [preview-windows (try
+                            (vec (buffer-windows preview-buffer))
+                            (catch _ []))
+          fallback-window (or preview-window source-window (focused-window))]
+      (doseq [window (if (seq preview-windows)
+                       preview-windows
+                       [fallback-window])]
+        (ignore-errors
+          (close-buffer true preview-buffer window)))
+      (when (buffer-listed? preview-buffer)
+        (ignore-errors
+          (kill-buffer preview-buffer))))))
+
+(defn- close-preview-entry! [preview]
+  (when preview
+    (close-preview-buffer! (:buffer preview) (:source-window preview) (:window preview))))
+
+(defn- preview-future-running? [preview]
+  (when-let [task (:future preview)]
+    (try
+      (future-running? task)
+      (catch _ false))))
+
+(defn- preview-live? [preview]
+  (or (preview-future-running? preview)
+    (and (:buffer preview)
+      (buffer-listed? (:buffer preview)))))
+
+(defn- same-buffer? [left right]
+  (and left right (= (:id left) (:id right))))
+
+(defn- preview-buffer-id-set [preview]
+  (loop [entry preview
+         ids #{}]
+    (if entry
+      (recur (:stale-preview entry)
+        (if-let [buffer (:buffer entry)]
+          (conj ids (:id buffer))
+          ids))
+      ids)))
+
+(defn- cleanup-orphaned-preview-buffers! [source-buffer keep-preview]
+  (doseq [preview-buffer (list-buffers)]
+    (let [state (ignore-errors @(buffer-state preview-buffer))]
+      (when (and (:regit-preview? state)
+              (same-buffer? source-buffer (:regit-preview-source-buffer state)))
+        (let [current-preview (or (ignore-errors (:regit-preview @(buffer-state source-buffer)))
+                                keep-preview)
+              keep-buffer-ids (preview-buffer-id-set current-preview)]
+          (when-not (contains? keep-buffer-ids (:id preview-buffer))
+            (close-preview-buffer! preview-buffer
+              (:source-window current-preview)
+              (:window current-preview))))))))
+
+(defn- clear-preview-if-current! [source-buffer token]
+  (swap! (buffer-state source-buffer)
+    (fn [state]
+      (if (= token (:token (:regit-preview state)))
+        (dissoc state :regit-preview)
+        state))))
+
+(defn- displayed-preview-entry [preview]
+  (when (and (:displayed? preview) (:buffer preview) (:window preview))
+    {:buffer (:buffer preview)
+     :source-window (:source-window preview)
+     :window (:window preview)}))
+
+(defn- visible-preview-entry [preview]
+  (or (displayed-preview-entry preview)
+    (:stale-preview preview)))
+
+(defn- close-preview-state-buffers! [preview keep-preview]
+  (let [keep-buffer (:buffer keep-preview)]
+    (when (and (:buffer preview)
+            (not (same-buffer? (:buffer preview) keep-buffer)))
+      (close-preview-buffer! (:buffer preview) (:source-window preview) (:window preview)))
+    (when (and (:stale-preview preview)
+            (not (same-buffer? (:buffer (:stale-preview preview)) keep-buffer)))
+      (close-preview-entry! (:stale-preview preview)))))
+
+(defn- cancel-preview! [source-buffer keep-displayed?]
+  (when-let [preview (:regit-preview @(buffer-state source-buffer))]
+    (let [token (:token preview)
+          keep-preview (when keep-displayed? (visible-preview-entry preview))]
+      (clear-preview-if-current! source-buffer token)
+      (when-let [task (:future preview)]
+        (cancel-future task))
+      (close-preview-state-buffers! preview keep-preview)
+      (cleanup-orphaned-preview-buffers! source-buffer keep-preview)
+      keep-preview)))
+
+(defn abort-preview! [source-buffer]
+  (cancel-preview! source-buffer false))
+
+(defn- remember-preview-buffer! [source-buffer token preview-buffer]
+  (let [state (swap! (buffer-state source-buffer)
+                (fn [state]
+                  (if (= token (:token (:regit-preview state)))
+                    (assoc-in state [:regit-preview :buffer] preview-buffer)
+                    state)))
+        preview (:regit-preview state)]
+    (and (= token (:token preview))
+      (same-buffer? preview-buffer (:buffer preview)))))
+
+(defn- register-preview-buffer! [source-buffer token preview-buffer]
+  (when preview-buffer
+    (when (remember-preview-buffer! source-buffer token preview-buffer)
+      (swap! (buffer-state preview-buffer) assoc
+        :regit-preview? true
+        :regit-preview-token token
+        :regit-preview-source-buffer source-buffer))))
+
+(defn- remember-preview-window! [source-buffer token preview-window]
+  (let [state (swap! (buffer-state source-buffer)
+                (fn [state]
+                  (if (= token (:token (:regit-preview state)))
+                    (-> state
+                      (assoc-in [:regit-preview :window] preview-window)
+                      (assoc-in [:regit-preview :displayed?] true)
+                      (update-in [:regit-preview] dissoc :stale-preview))
+                    state)))
+        preview (:regit-preview state)]
+    (and (= token (:token preview))
+      (:displayed? preview)
+      (= (:id preview-window) (:id (:window preview))))))
+
+(defn- display-preview-buffer! [source-buffer source-window token target selected-target-fn preview-buffer]
+  (try
+    (if-not (and (preview-current? source-buffer token)
+              (selected-target-matches? source-buffer source-window selected-target-fn target))
+      (do
+        (clear-preview-if-current! source-buffer token)
+        (close-preview-buffer! preview-buffer source-window nil)
+        false)
+      (let [focused-before (focused-window)
+            source-was-focused? (= focused-before source-window)
+            stale-preview (:stale-preview (:regit-preview @(buffer-state source-buffer)))
+            preview-window (binding [*buffer* source-buffer
+                                     *window* source-window]
+                             (or (regit-diff/regit-view-window {:source-window source-window
+                                                                :fallback-to-created-window? true})
+                               source-window))]
+        (if (and preview-window
+              (preview-current? source-buffer token)
+              (selected-target-matches? source-buffer source-window selected-target-fn target))
+          (frame/with-render-coalescing
+            (set-window-buffer preview-buffer preview-window)
+            (binding [*buffer* preview-buffer
+                      *window* preview-window]
+              (move-cursor 0 false preview-window)
+              (set-scroll-offset 0 preview-window))
+            (when *after-set-preview-buffer-hook*
+              (*after-set-preview-buffer-hook* preview-buffer preview-window))
+            (if (and (preview-current? source-buffer token)
+                  (selected-target-matches? source-buffer source-window selected-target-fn target)
+                  (remember-preview-window! source-buffer token preview-window))
+              (do
+                (close-preview-entry! stale-preview)
+                (cleanup-orphaned-preview-buffers! source-buffer
+                  (:regit-preview @(buffer-state source-buffer)))
+                (when (and source-was-focused?
+                        (source-window-valid? source-buffer source-window))
+                  (set-focused-window source-window))
+                (draw-frame)
+                true)
+              (do
+                (clear-preview-if-current! source-buffer token)
+                (close-preview-buffer! preview-buffer source-window preview-window)
+                (cleanup-orphaned-preview-buffers! source-buffer
+                  (:regit-preview @(buffer-state source-buffer)))
+                false)))
+          (do
+            (clear-preview-if-current! source-buffer token)
+            (close-preview-buffer! preview-buffer source-window preview-window)
+            (cleanup-orphaned-preview-buffers! source-buffer
+              (:regit-preview @(buffer-state source-buffer)))
+            false))))
+    (catch _
+      (clear-preview-if-current! source-buffer token)
+      (close-preview-buffer! preview-buffer source-window nil)
+      (cleanup-orphaned-preview-buffers! source-buffer
+        (:regit-preview @(buffer-state source-buffer)))
+      false)))
+
+(defn update-preview! [source-buffer source-window target selected-target-fn create-buffer-fn promote-buffer-fn]
+  (if-not target
+    (do
+      (abort-preview! source-buffer)
+      (cleanup-orphaned-preview-buffers! source-buffer nil))
+    (let [current (:regit-preview @(buffer-state source-buffer))]
+      (cleanup-orphaned-preview-buffers! source-buffer current)
+      (when (or (not= target (:target current))
+              (not (preview-live? current)))
+        (let [stale-preview (cancel-preview! source-buffer true)
+              token (gensym "regit-preview")
+              initial-state (cond-> {:token token
+                                     :target target
+                                     :source-window source-window
+                                     :promote-buffer-fn promote-buffer-fn}
+                              stale-preview (assoc :stale-preview stale-preview))]
+          (swap! (buffer-state source-buffer) assoc :regit-preview initial-state)
+          (let [task (future
+                       (try
+                         (when (and (preview-current? source-buffer token)
+                                 (selected-target-matches? source-buffer source-window selected-target-fn target))
+                           (when (> regit-preview-delay-ms 0)
+                             (sleep (ms->duration regit-preview-delay-ms)))
+                           (when (and (preview-current? source-buffer token)
+                                   (selected-target-matches? source-buffer source-window selected-target-fn target))
+                             (when *before-create-preview-buffer-hook*
+                               (*before-create-preview-buffer-hook*))
+                             (when (and (preview-current? source-buffer token)
+                                     (selected-target-matches? source-buffer source-window selected-target-fn target))
+                               (let [preview-buffer (create-buffer-fn
+                                                      (fn [buffer]
+                                                        (register-preview-buffer! source-buffer token buffer)))]
+                                 (when preview-buffer
+                                   (register-preview-buffer! source-buffer token preview-buffer)
+                                   (display-preview-buffer! source-buffer source-window token target selected-target-fn preview-buffer))))))
+                         (catch _
+                           (let [preview (:regit-preview @(buffer-state source-buffer))]
+                             (when (= token (:token preview))
+                               (clear-preview-if-current! source-buffer token)
+                               (close-preview-state-buffers! preview (:stale-preview preview))
+                               (cleanup-orphaned-preview-buffers! source-buffer (:stale-preview preview))))
+                           nil)))]
+            (swap! (buffer-state source-buffer)
+              (fn [state]
+                (if (= token (:token (:regit-preview state)))
+                  (assoc-in state [:regit-preview :future] task)
+                  state)))))))))
+
+(defn promote-preview! [source-buffer target]
+  (let [preview (:regit-preview @(buffer-state source-buffer))]
+    (when (and (= target (:target preview))
+            (:displayed? preview)
+            (:buffer preview)
+            (:window preview))
+      (let [preview-buffer (:buffer preview)
+            preview-window (:window preview)
+            promote-buffer-fn (:promote-buffer-fn preview)]
+        (cleanup-orphaned-preview-buffers! source-buffer preview)
+        (swap! (buffer-state source-buffer)
+          (fn [state]
+            (if (= (:token preview) (:token (:regit-preview state)))
+              (dissoc state :regit-preview)
+              state)))
+        (when promote-buffer-fn
+          (promote-buffer-fn preview-buffer))
+        (set-window-buffer preview-buffer preview-window)
+        (set-focused-window preview-window)
+        true))))
+
+(defn active-preview [source-buffer]
+  (:regit-preview @(buffer-state source-buffer)))
+
+(defn wait-for-preview-buffer [source-buffer target timeout-ms]
+  (let [started (time-now)]
+    (loop []
+      (let [preview (active-preview source-buffer)]
+        (if (and (= target (:target preview))
+              (:displayed? preview)
+              (:buffer preview)
+              (buffer-listed? (:buffer preview)))
+          (:buffer preview)
+          (if (> (duration->ms (time-elapsed started)) timeout-ms)
+            nil
+            (do
+              (sleep (ms->duration 10))
+              (recur))))))))
+
+(defn wait-for-buffer-closed [buffer timeout-ms]
+  (let [started (time-now)]
+    (loop []
+      (if-not (buffer-listed? buffer)
+        true
+        (if (> (duration->ms (time-elapsed started)) timeout-ms)
+          false
+          (do
+            (sleep (ms->duration 10))
+            (recur)))))))
+
+(add-hook! [buffer/before-buffer-destroy regit-preview-source-destroy-hook] []
+  (ignore-errors
+    (when (:regit-preview @(buffer-state))
+      (abort-preview! *buffer*))))
+
+(add-hook! [buffer/before-buffer-destroy regit-preview-buffer-destroy-hook] []
+  (ignore-errors
+    (let [state @(buffer-state)]
+      (when (:regit-preview? state)
+        (when-let [source-buffer (:regit-preview-source-buffer state)]
+          (let [token (:regit-preview-token state)]
+            (swap! (buffer-state source-buffer)
+              (fn [source-state]
+                (if (and (= token (:token (:regit-preview source-state)))
+                      (= (:id *buffer*) (:id (:buffer (:regit-preview source-state)))))
+                  (dissoc source-state :regit-preview)
+                  source-state)))))))))

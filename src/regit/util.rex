@@ -1,0 +1,221 @@
+(ns regit.util
+  (:require [rex.base.frame :as frame]
+            [rex.base.mode :refer [activate-mode]]
+            [rex.base.theme :as theme]
+            [rex.string :as str])
+  (:use rex.core rex.builtins))
+
+(defmacro with-status-buffer-pending [root & body]
+  `(let [root# ~root
+         f# (fn [] ~@body)
+         buffer# (when root#
+                   (let [root-str# (str root#)
+                         name# (str "*regit-status: " (or (path-filename root-str#) root-str#) "*")]
+                     (first (filter (fn [candidate#] (= (:name candidate#) name#)) (list-buffers)))))]
+     (if buffer#
+       (if (buffer-pending? buffer#)
+         (f#)
+         (with-buffer-pending buffer#
+           (f#)))
+       (f#))))
+
+(defn- git-cmd-env [root env & args]
+  (run-shell* "git" (into ["-C" (str root)] args) {:env env}))
+
+(defn- get-git-output [root & args]
+  (let [result (apply git-cmd-env root {} args)]
+    (when (zero? (:code result))
+      (str/trim (:out result)))))
+
+(defn- current-branch [root]
+  (or (get-git-output root "rev-parse" "--abbrev-ref" "HEAD")
+    "unknown"))
+
+(defn- write-shell-script! [name content]
+  (let [path (temp-file-path name)]
+    (write-file path content)
+    path))
+
+(defn- temp-marker-path [name]
+  (let [path (temp-file-path name)]
+    (ignore-errors (delete-file path))
+    path))
+
+(defn- regit-editor-script []
+  (write-shell-script! "regit-commit-editor"
+    (str "#!/bin/sh\n"
+      "rm -f \"$REGIT_EDITOR_CONTINUE\" \"$REGIT_EDITOR_ABORT\"\n"
+      "request_tmp=\"$REGIT_EDITOR_REQUEST.$$\"\n"
+      "printf '%s\\n' \"$1\" > \"$request_tmp\"\n"
+      "mv \"$request_tmp\" \"$REGIT_EDITOR_REQUEST\"\n"
+      "while [ ! -e \"$REGIT_EDITOR_CONTINUE\" ] && [ ! -e \"$REGIT_EDITOR_ABORT\" ]; do\n"
+      "  sleep 0.05\n"
+      "done\n"
+      "if [ -e \"$REGIT_EDITOR_ABORT\" ]; then\n"
+      "  exit 1\n"
+      "fi\n"
+      "rm -f \"$REGIT_EDITOR_REQUEST\" \"$REGIT_EDITOR_CONTINUE\"\n")))
+
+(defn- editor-command [script]
+  (str "sh " script))
+
+(defn- editor-env [state]
+  (let [cmd (editor-command (:script state))]
+    {"GIT_EDITOR" cmd
+     "VISUAL" cmd
+     "EDITOR" cmd
+     "REGIT_EDITOR_REQUEST" (:request-path state)
+     "REGIT_EDITOR_CONTINUE" (:continue-path state)
+     "REGIT_EDITOR_ABORT" (:abort-path state)}))
+
+(defn- make-editor-state [root operation opts]
+  (let [script (regit-editor-script)]
+    {:root root
+     :operation operation
+     :return-window (:return-window opts)
+     :request-path (temp-marker-path "regit-editor-request")
+     :continue-path (temp-marker-path "regit-editor-continue")
+     :abort-path (temp-marker-path "regit-editor-abort")
+     :script script
+     :active-buffer nil}))
+
+(defn- cleanup-editor-state! [state]
+  (doseq [path [(:request-path state)
+                (:continue-path state)
+                (:abort-path state)
+                (:script state)]]
+    (when (and path (path-exists? path))
+      (ignore-errors (delete-file path)))))
+
+(defn render-commit-message-content [content]
+  (let [text (or content "")
+        lines (str/split-lines text)
+        trailing-newline? (str/ends-with? text "\n")
+        last-idx (dec (count lines))]
+    (apply str
+      (map-indexed
+        (fn [idx line]
+          (let [comment? (str/starts-with? line "#")
+                line-text (if comment? (theme/with-face line :comment) line)
+                newline? (or (< idx last-idx) trailing-newline?)
+                newline-text (when newline?
+                               (if comment?
+                                 (theme/with-face "\n" :comment)
+                                 "\n"))]
+            (str line-text newline-text)))
+        lines))))
+
+(defn- editor-message-path [state]
+  (let [path (:request-path state)]
+    (when (and path (path-exists? path))
+      (str/trim (read-file path)))))
+
+(defn- commit-buffer-name [root]
+  (str "*regit-commit-message " (current-branch root) "*"))
+
+(defn- ensure-commit-message-mode! []
+  (ignore-errors (require 'regit.commit)))
+
+(defn- open-git-editor-commit-message-buffer! [state-atom opts]
+  (let [state @state-atom
+        root (:root state)
+        message-path (editor-message-path state)
+        return-window (:return-window state)
+        window (or return-window (focused-window))
+        buffer (create-buffer)
+        content (try
+                  (read-file message-path)
+                  (catch _ ""))]
+    (ensure-commit-message-mode!)
+    (frame/with-render-coalescing
+      (set-buffer-name (commit-buffer-name root) buffer)
+      (swap! (buffer-state buffer) assoc
+        :project-root root
+        :regit-root root
+        :regit-commit-message-path message-path
+        :regit-commit-editor-state state-atom
+        :return-window return-window)
+      (set-window-buffer buffer window)
+      (set-focused-window window)
+      (binding [*buffer* buffer
+                *window* window]
+        (activate-mode :regit-commit-message)
+        (set-string (render-commit-message-content content) buffer)
+        (move-cursor 0 false window)
+        (set-scroll-offset 0 window)))
+    (swap! state-atom assoc :active-buffer buffer)
+    (when-let [on-open-editor (:on-open-editor opts)]
+      (on-open-editor buffer))
+    buffer))
+
+(defn- run-result-handler! [state opts result]
+  (try
+    (if (path-exists? (:abort-path state))
+      (do
+        (when-let [on-abort (:on-abort opts)]
+          (on-abort))
+        (message (or (:abort-message opts) "Aborted commit message edit"))
+        nil)
+      (if-let [on-result (:on-result opts)]
+        (on-result result)
+        result))
+    (finally
+      (cleanup-editor-state! state))))
+
+(defn- editor-requested? [state]
+  (and (:request-path state) (path-exists? (:request-path state))))
+
+(defn- wait-for-git-or-editor! [state git-task]
+  (loop []
+    (cond
+      (editor-requested? state)
+      :editor
+
+      (not (future-running? git-task))
+      :done
+
+      :else
+      (do
+        (sleep (ms->duration 10))
+        (recur)))))
+
+(defn- monitor-git-editor! [state-atom git-task opts handled?]
+  (future
+    (loop [handled? handled?]
+      (let [state @state-atom]
+        (cond
+          (not (future-running? git-task))
+          (run-result-handler! state opts @git-task)
+
+          (and (editor-requested? state) (not handled?))
+          (do
+            (open-git-editor-commit-message-buffer! state-atom opts)
+            (recur true))
+
+          (editor-requested? state)
+          (do
+            (sleep (ms->duration 10))
+            (recur handled?))
+
+          :else
+          (do
+            (sleep (ms->duration 10))
+            (recur false)))))))
+
+(defn run-git-with-commit-editor! [root operation env args opts]
+  (let [opts (or opts {})
+        state-atom (atom (make-editor-state root operation opts))
+        state @state-atom
+        env (merge (or env {}) (editor-env state))
+        git-task (future
+                   (with-status-buffer-pending root
+                     (apply git-cmd-env root env args)))]
+    (case (wait-for-git-or-editor! state git-task)
+      :editor
+      (do
+        (open-git-editor-commit-message-buffer! state-atom opts)
+        (monitor-git-editor! state-atom git-task opts true)
+        nil)
+
+      :done
+      (run-result-handler! state opts @git-task))))

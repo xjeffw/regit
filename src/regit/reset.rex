@@ -1,0 +1,356 @@
+(ns regit.reset
+  (:require [regit.command :refer [regit-command]]
+            [regit.diff :as regit-diff]
+            [regit.util :refer [with-status-buffer-pending]]
+            [rex.ui.iselect :as iselect]
+            [rex.base.project :as project]
+            [rex.base.buffer :as buffer]
+            [rex.base.hook :refer [run-hooks]]
+            [rex.string :as str])
+  (:use rex.core rex.builtins))
+
+(def reset-action-specs
+  {:mixed {:arg "--mixed"
+           :label "mixed    (HEAD and index)"
+           :prompt-prefix "Reset"}
+   :soft {:arg "--soft"
+          :label "soft     (HEAD only)"
+          :prompt-prefix "Soft reset"}
+   :hard {:arg "--hard"
+          :label "hard     (HEAD, index and worktree)"
+          :prompt-prefix "Hard reset"}
+   :keep {:arg "--keep"
+          :label "keep     (HEAD and index, keeping uncommitted)"
+          :prompt-prefix "Reset"}
+   :index {:arg nil
+           :path "."
+           :label "index    (only)"
+           :prompt-prefix "Reset index"}
+   :worktree {:arg :worktree
+              :label "worktree (only)"
+              :prompt-prefix "Reset worktree"}})
+
+(def special-refnames ["HEAD" "ORIG_HEAD" "FETCH_HEAD" "MERGE_HEAD" "CHERRY_PICK_HEAD"])
+
+(defn- git-cmd [root & args]
+  (run-shell* "git" (into ["-C" (str root)] args)))
+
+(defn- git-cmd-env [root env & args]
+  (run-shell* "git" (into ["-C" (str root)] args) {:env env}))
+
+(defn- get-git-output [root & args]
+  (let [result (apply git-cmd root args)]
+    (when (zero? (:code result))
+      (str/trim (:out result)))))
+
+(defn- result-details [result]
+  (->> [(:err result) (:out result)]
+    (map str/trim)
+    (remove str/blank?)
+    (str/join "\n")))
+
+(defn- git-error-message [operation result]
+  (let [details (result-details result)]
+    (if (str/blank? details)
+      (str operation " failed (exit " (:code result) ")")
+      (str operation " failed: " details))))
+
+(defn- current-branch [root]
+  (try
+    (git-current-branch root)
+    (catch _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
+
+(defn- current-branch-label [root]
+  (or (current-branch root) "detached head"))
+
+(defn- ref-lines [root & namespaces]
+  (let [out (apply get-git-output root
+              "for-each-ref"
+              "--format=%(refname:short)"
+              namespaces)]
+    (vec (->> (str/split (or out "") #"\r?\n")
+           (map str/trim)
+           (remove str/blank?)
+           (remove #(str/ends-with? % "/HEAD"))))))
+
+(defn- local-branches [root]
+  (ref-lines root "refs/heads"))
+
+(defn- branch-and-ref-targets [root]
+  (ref-lines root "refs/heads" "refs/remotes" "refs/tags"))
+
+(defn- rev-exists? [root rev]
+  (zero? (:code (git-cmd root "rev-parse" "--verify" "--quiet" rev))))
+
+(defn- existing-special-refnames [root]
+  (vec (filter #(rev-exists? root %) special-refnames)))
+
+(defn- reset-targets [root & [context-commit exclude]]
+  (let [excluded (set (if (sequential? exclude) exclude [exclude]))]
+    (vec (remove #(contains? excluded %)
+           (distinct
+             (concat
+               (when-not (str/blank? (or context-commit "")) [context-commit])
+               (branch-and-ref-targets root)
+               (existing-special-refnames root)))))))
+
+(defn- selected-value [input selected-entry]
+  (let [input (str/trim (str (or input "")))
+        selected (when selected-entry (str selected-entry))]
+    (if (str/blank? (or selected ""))
+      input
+      selected)))
+
+(defn- notify-project-file-git-change! [root]
+  (doseq [buf (project/project-file-buffers root)]
+    (when-let [file (:file buf)]
+      (binding [*buffer* buf]
+        (run-hooks buffer/on-buffer-file-git-change file)))))
+
+(defn- refresh-status! [root start-window]
+  (try
+    (when (call-var regit.status/find-status-buffer root)
+      (let [should-focus? (if start-window (= (focused-window) start-window) nil)]
+        (or (call-var regit.status/refresh-status! root should-focus?)
+          (call-var regit.status/regit-status root should-focus?))))
+    (catch _ nil)))
+
+(defn- after-git-change! [root start-window]
+  (git-refresh-index root)
+  (git-clear-repo-cache)
+  (notify-project-file-git-change! root)
+  (refresh-status! root start-window))
+
+(defn- run-git-result! [root operation result opts]
+  (let [success? (zero? (:code result))]
+    (after-git-change! root (:start-window opts))
+    (if success?
+      (do
+        (when-let [message-text (:success-message opts)]
+          (message message-text))
+        nil)
+      (let [msg (git-error-message operation result)]
+        (message msg)
+        msg))))
+
+(defn- run-git! [root operation args & [opts]]
+  (let [opts (or opts {})]
+    (with-status-buffer-pending root
+      (run-git-result! root operation (apply git-cmd root args) opts))))
+
+(defn- run-worktree-reset! [root target & [opts]]
+  (let [opts (or opts {})
+        index-path (temp-file-path "regit-reset-index")
+        env {"GIT_INDEX_FILE" index-path}]
+    (try
+      (ignore-errors (delete-file index-path))
+      (let [read-result (git-cmd-env root env "read-tree" target)
+            checkout-result (if (zero? (:code read-result))
+                              (git-cmd-env root env "checkout-index" "--all" "--force")
+                              read-result)]
+        (with-status-buffer-pending root
+          (run-git-result! root "Reset worktree" checkout-result opts)))
+      (finally
+        (ignore-errors (delete-file index-path))))))
+
+(defn run-reset! [root kind target & [opts]]
+  (let [opts (or opts {})
+        spec (get reset-action-specs kind)
+        arg (:arg spec)
+        path (:path spec)
+        operation (str "Reset " (name kind))
+        success-message (str "Reset " (current-branch-label root) " to " target)
+        opts (assoc opts :success-message success-message)]
+    (cond
+      (str/blank? (or target ""))
+      "No reset target selected"
+
+      (= arg :worktree)
+      (run-worktree-reset! root target opts)
+
+      :else
+      (run-git! root operation
+        (vec (remove nil?
+               (concat ["reset" arg target]
+                 (when path ["--" path]))))
+        opts))))
+
+(defn- reset-branch! [root branch target & [opts]]
+  (let [opts (or opts {})]
+    (cond
+      (str/blank? (or branch ""))
+      "No branch selected"
+
+      (str/blank? (or target ""))
+      "No reset target selected"
+
+      (= branch (current-branch root))
+      (run-reset! root :hard target opts)
+
+      :else
+      (run-git! root "Reset branch"
+        ["update-ref" "-m" (str "reset: moving to " target) (str "refs/heads/" branch) target]
+        (assoc opts :success-message (str "Reset " branch " to " target))))))
+
+(defn- revision-files [root rev]
+  (let [files (get-git-output root "ls-tree" "-r" "--name-only" rev)
+        dirs (get-git-output root "ls-tree" "-r" "-d" "--name-only" rev)]
+    (vec (distinct
+           (concat
+             (->> (str/split (or files "") #"\r?\n")
+               (map str/trim)
+               (remove str/blank?))
+             (->> (str/split (or dirs "") #"\r?\n")
+               (map str/trim)
+               (remove str/blank?)))))))
+
+(defn- checkout-file! [root rev file & [opts]]
+  (let [opts (or opts {})]
+    (if (str/blank? (or file ""))
+      "No file selected"
+      (run-git! root "Checkout file" ["checkout" rev "--" file]
+        (assoc opts :success-message (str "Checked out " file " from " rev))))))
+
+(defn- commit-id-from-status-line []
+  (let [state @(buffer-state)
+        item (get (:line-to-item state) (current-line))
+        path (regit-diff/outline-item-id item)]
+    (when (and (vector? path) (= (first path) :commit))
+      (nth path 2))))
+
+(defn- commit-id-from-log-line []
+  (with-read-lock [lock (buffer-text)]
+    (let [line (current-line)]
+      (when (and (>= line 0) (< line (buffer/len-lines lock)))
+        (second (re-find #"^([0-9a-f]{7,40})" (buffer/text-line lock line)))))))
+
+(defn- context-commit-at-point []
+  (case *mode*
+    :regit-status (commit-id-from-status-line)
+    :regit-log (commit-id-from-log-line)
+    nil))
+
+(defn- context-root []
+  (or (:regit-root @(buffer-state))
+    (project/current-project-root)))
+
+(defn- select-reset-target [root prompt context-commit on-select & [exclude]]
+  (let [entries (reset-targets root context-commit exclude)
+        submit-fn (fn [input selected-entry]
+                    (let [target (selected-value input selected-entry)]
+                      (if (str/blank? (or target ""))
+                        (do
+                          (message "No reset target selected")
+                          :keep-open)
+                        (let [result (on-select target)]
+                          (if (string? result)
+                            (do
+                              (message result)
+                              :keep-open)
+                            result)))))]
+    (iselect/iselect
+      prompt
+      (fn [_input] entries)
+      (fn [_entry] nil)
+      {:initial-input context-commit
+       :complete-fn #'iselect/complete-to-first-and-select
+       :submit-fn submit-fn
+       :sync-input-on-move? false
+       :preserve-selection? true
+       :clear-selection-on-input? true})))
+
+(defn- select-reset-this-target [root kind context-commit start-window]
+  (let [spec (get reset-action-specs kind)
+        prompt (str (:prompt-prefix spec) " " (current-branch-label root) " to:")]
+    (select-reset-target root prompt context-commit
+      (fn [target]
+        (run-reset! root kind target {:start-window start-window})))))
+
+(defn- select-branch-reset [root context-commit start-window]
+  (let [branches (local-branches root)]
+    (iselect/iselect
+      "Reset branch:"
+      (fn [_input] branches)
+      (fn [_entry] nil)
+      {:initial-input (current-branch root)
+       :complete-fn #'iselect/complete-to-first-and-select
+       :submit-fn (fn [input selected-entry]
+                    (let [branch (selected-value input selected-entry)]
+                      (if (str/blank? (or branch ""))
+                        (do
+                          (message "No branch selected")
+                          :keep-open)
+                        (fn []
+                          (select-reset-target root (str "Reset " branch " to:")
+                            context-commit
+                            (fn [target]
+                              (reset-branch! root branch target {:start-window start-window}))
+                            branch)))))
+       :sync-input-on-move? false
+       :preserve-selection? true
+       :clear-selection-on-input? true})))
+
+(defn- select-file-checkout [root context-commit start-window]
+  (select-reset-target root "Checkout from revision:" context-commit
+    (fn [rev]
+      (fn []
+        (let [files (revision-files root rev)]
+          (iselect/iselect
+            "Checkout file:"
+            (fn [_input] files)
+            (fn [_entry] nil)
+            {:complete-fn #'iselect/complete-to-first-and-select
+             :submit-fn (fn [input selected-entry]
+                          (let [file (selected-value input selected-entry)]
+                            (if (str/blank? (or file ""))
+                              (do
+                                (message "No file selected")
+                                :keep-open)
+                              (let [result (checkout-file! root rev file {:start-window start-window})]
+                                (if (string? result)
+                                  (do
+                                    (message result)
+                                    :keep-open)
+                                  result)))))
+             :sync-input-on-move? false
+             :preserve-selection? true
+             :clear-selection-on-input? true}))))))
+
+(defn- reset-layout []
+  [{:horizontal-sections
+    [{:section "Reset"
+      :items [{:action "b"}
+              {:action "f"}]}
+     {:section "Reset this"
+      :items [{:action "m"}
+              {:action "s"}
+              {:action "h"}
+              {:action "k"}
+              {:action "i"}
+              {:action "w"}]}]
+    :gap "     "}])
+
+(defn ^:interactive regit-reset [& [root]]
+  (if-let [root (or root (context-root))]
+    (let [root (str root)
+          context-commit (context-commit-at-point)
+          start-window (focused-window)
+          target-action (fn [kind]
+                          {:label (:label (get reset-action-specs kind))
+                           :fn (fn [_args]
+                                 (select-reset-this-target root kind context-commit start-window))})]
+      (regit-command
+        {:args {}
+         :return-window start-window
+         :actions {"b" {:label "branch"
+                        :fn (fn [_args] (select-branch-reset root context-commit start-window))}
+                   "f" {:label "file"
+                        :fn (fn [_args] (select-file-checkout root context-commit start-window))}
+                   "m" (target-action :mixed)
+                   "s" (target-action :soft)
+                   "h" (target-action :hard)
+                   "k" (target-action :keep)
+                   "i" (target-action :index)
+                   "w" (target-action :worktree)}
+         :layout (reset-layout)}))
+    (message "Not in a git repository")))

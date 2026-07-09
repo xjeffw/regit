@@ -1,0 +1,307 @@
+(ns regit.log
+  (:require [rex.base.mode :as mode]
+            [rex.base.buffer :as buffer]
+            [rex.base.frame :as frame]
+            [rex.base.window :as window]
+            [rex.base.hook :refer [add-hook!]]
+            [rex.base.keys :refer [make-keymap map!]]
+            [regit.command :as regit-command]
+            [regit.preview :as regit-preview]
+            [regit.reset :refer [regit-reset]]
+            [regit.view-commit :refer [regit-view-commit]]
+            [rex.base.project :as project]
+            [rex.ui.hl-line]
+            [rex.string :as str]
+            [rex.base.theme :as theme]
+            [rex.util :as util])
+  (:use rex.core rex.builtins))
+
+(def log-page-size 256)
+
+(defn- header-text [text]
+  (theme/with-face text :regit-header))
+
+(defn- ref-text [text]
+  (theme/with-face text :regit-ref))
+
+(defn- branch-text [text]
+  (theme/with-face text :regit-branch))
+
+(defn- repo-name [root]
+  (or (path-filename root) root))
+
+(defn- repo-text [text]
+  (theme/with-face text :regit-repo))
+
+(defn- symbolic-head? [ref]
+  (or (= ref "HEAD")
+    (str/ends-with? ref "/HEAD")))
+
+(defn- render-ref [ref]
+  (cond
+    (str/includes? ref " -> ")
+    (let [[source target] (str/split ref #" -> " 2)]
+      (str
+        (if (symbolic-head? source)
+          (ref-text source)
+          (branch-text source))
+        (ref-text " -> ")
+        (branch-text target)))
+
+    (str/includes? ref ": ")
+    (let [[label value] (str/split ref #": " 2)]
+      (str
+        (ref-text (str label ": "))
+        (ref-text value)))
+
+    (symbolic-head? ref) (ref-text ref)
+    :else (branch-text ref)))
+
+(defn- render-refs [refs]
+  (when (seq refs)
+    (str
+      (ref-text "[")
+      (str/join (ref-text ", ")
+        (mapv render-ref refs))
+      (ref-text "] "))))
+
+(defn- commit-line [commit]
+  (let [refs (:refs commit)
+        refs-str (render-refs refs)]
+    (str (theme/with-face (:id commit) :dimmed) " * " (or refs-str "") (:summary commit))))
+
+(defn- log-buffer-name [root target]
+  (let [repo (repo-name root)]
+    (str "*regit-log: " repo " " target "*")))
+
+(defn- log-buffer-label [root target]
+  (str (theme/with-face "regit-log: " :special-buffer)
+    (repo-text (repo-name root))
+    " "
+    (branch-text target)))
+
+(defn- find-log-buffer [root target]
+  (let [name (log-buffer-name root target)]
+    (first (filter #(= (:name %) name) (list-buffers)))))
+
+(defn- parse-commits [rendered]
+  (if (str/blank? rendered)
+    []
+    (let [records (str/split rendered #"\u001e")]
+      (->> records
+        (map str/trim)
+        (remove str/blank?)
+        (mapv (fn [record]
+                (let [parts (str/split record #"\u001f")]
+                  {:id (nth parts 0 "")
+                   :refs (let [refs (nth parts 1 "")]
+                           (if (str/blank? refs)
+                             []
+                             (mapv str/trim (str/split refs #","))))
+                   :summary (nth parts 2 "")
+                   :author (nth parts 3 "")
+                   :date (let [date (nth parts 4 "0")]
+                           (if (str/blank? date)
+                             0
+                             (read-string date)))})))))))
+
+(defn- git-cmd [root & args]
+  (run-shell* "git" (into ["-C" (str root)] args)))
+
+(defn- get-git-output [root & args]
+  (let [result (apply git-cmd root args)]
+    (when (zero? (:code result))
+      (str/trim (:out result)))))
+
+(defn- load-log-commits [root target limit]
+  (let [fetch-count (inc limit)
+        out (get-git-output root "log" target "--decorate=short" "--format=%h%x1f%D%x1f%s%x1f%an%x1f%ct%x1e" (str "-n" fetch-count))
+        commits (parse-commits out)
+        has-more (> (count commits) limit)
+        commits (if has-more (subvec commits 0 limit) commits)]
+    {:commits commits
+     :has-more has-more}))
+
+(defn- build-log-document [root target limit]
+  (let [{:keys [commits has-more]} (load-log-commits root target limit)
+        header (header-text (str "Commits in " target))
+        commit-lines (if (seq commits)
+                       (mapv commit-line commits)
+                       ["  (no commits)"])
+        parts (cond-> [header]
+                true (into commit-lines)
+                has-more (conj (theme/with-face "Type + to show more history" :dimmed)))]
+    {:content (str/join "\n" parts)
+     :has-more has-more
+     :commits commits}))
+
+(defn- render-log-buffer! [buffer root target limit]
+  (let [{:keys [content commits]} (build-log-document root target limit)]
+    (set-buffer-read-only false buffer)
+    (binding [*buffer* buffer]
+      (set-string content buffer)
+      (clear-line-overlay :regit-log-info buffer)
+      (doseq [idx (range (count commits))]
+        (let [commit (nth commits idx)
+              line (inc idx) ;; Commits start at line 1 (after header)
+              author (:author commit)
+              date (util/format-relative-time (:date commit))
+              text (str (theme/with-face author :regit-author)
+                     " " (theme/with-face (str/left-pad date 12) :regit-date))]
+          (add-line-overlay-span :regit-log-info line (inc line)
+            {:text text :alignment :right :offset 2}
+            buffer))))
+
+    (set-buffer-read-only true buffer)))
+
+(defn- rerender-log-buffer! []
+  (when-let [root (:regit-root *buffer*)]
+    (let [window (or *window* (focused-window))
+          cursor-line (current-line)
+          scroll (when window (scroll-offset window))
+          state @(buffer-state)
+          target (:regit-log-target state)
+          limit (:regit-log-limit state)]
+      (frame/with-render-coalescing
+        (render-log-buffer! *buffer* root target limit)
+        (when window
+          (let [last-line (max 0 (dec (buffer-lines *buffer*)))
+                target-line (min cursor-line last-line)
+                target-pos (with-read-lock [lock (buffer-text *buffer*)]
+                             (buffer/line-to-char lock target-line))]
+            (move-cursor target-pos false window)
+            (when scroll
+              (set-scroll-offset scroll window))
+            (ensure-scroll-offset window)
+            (ensure-horizontal-scroll-offset window)))))))
+
+(defn- preview-target [root commit-id]
+  [:commit (str root) commit-id])
+
+(defn- commit-id-at-line [line]
+  (with-read-lock [lock (buffer-text)]
+    (when (and (>= line 0)
+            (< line (buffer/len-lines lock)))
+      (second (re-find #"^([0-9a-f]{7,40})" (buffer/text-line lock line))))))
+
+(defn- preview-target-at-cursor []
+  (let [state @(buffer-state)
+        root (:regit-root state)]
+    (when-let [commit-id (commit-id-at-line (current-line))]
+      (preview-target root commit-id))))
+
+(defn- create-preview-buffer! [target return-window register-buffer-fn]
+  (let [root (second target)
+        commit-id (nth target 2)]
+    (call-var regit.view-commit/create-regit-view-commit-preview-buffer! root commit-id return-window register-buffer-fn)))
+
+(defn- promote-preview-buffer! [target return-window preview-buffer]
+  (call-var regit.view-commit/promote-regit-view-commit-preview! preview-buffer return-window))
+
+(defn- update-log-preview! []
+  (let [source-buffer *buffer*
+        source-window (or *window* (focused-window))
+        target (binding [*buffer* source-buffer
+                         *window* source-window]
+                 (preview-target-at-cursor))]
+    (regit-preview/update-preview!
+      source-buffer
+      source-window
+      target
+      #'preview-target-at-cursor
+      (fn [register-buffer-fn] (create-preview-buffer! target source-window register-buffer-fn))
+      (fn [preview-buffer] (promote-preview-buffer! target source-window preview-buffer)))))
+
+(defn ^:interactive regit-log-enter []
+  (let [state @(buffer-state)
+        root (:regit-root state)
+        commit-id (commit-id-at-line (current-line))]
+    (if commit-id
+      (let [target (preview-target root commit-id)]
+        (if-not (regit-preview/promote-preview! *buffer* target)
+          (do
+            (regit-preview/abort-preview! *buffer*)
+            (let [source-buffer *buffer*
+                  result (regit-view-commit commit-id)]
+              (regit-preview/abort-preview! source-buffer)
+              result))))
+      (message "No commit at this line"))))
+
+(defn ^:interactive regit-log-more []
+  (let [state (buffer-state)]
+    (when-let [root (:regit-root @state)]
+      (let [limit (or (:regit-log-limit @state) log-page-size)
+            new-limit (+ limit log-page-size)]
+        (swap! state assoc :regit-log-limit new-limit)
+        (rerender-log-buffer!)))))
+
+(def regit-log-keymap (make-keymap))
+
+(map! :map regit-log-keymap
+  ("q" #'close-buffer)
+  ("<enter>" #'regit-log-enter)
+  ("O" #'regit-reset)
+  ("+" #'regit-log-more))
+
+(def regit-log-keymaps
+  [regit-log-keymap])
+
+(mode/register-mode :regit-log
+  {:name :regit-log
+   :icon "󰊢 "
+   :keymaps regit-log-keymaps
+   :submodes [:hl-line :vim]})
+
+(add-hook! [window/on-window-cursor-moved regit-log-preview-cursor-moved-hook] []
+  (when (and (= *mode* :regit-log)
+          (= *window* (focused-window))
+          regit-preview/regit-preview-on-focus)
+    (update-log-preview!)))
+
+(defn- open-log-buffer! [root & [target]]
+  (let [root (str root)
+        target (or target (git-current-branch root) "HEAD")
+        window (focused-window)
+        existing (find-log-buffer root target)
+        buffer (or existing (create-buffer true))
+        state (buffer-state buffer)
+        limit (or (:regit-log-limit @state) log-page-size)]
+    (frame/with-render-coalescing
+      (when-not existing
+        (set-buffer-name (log-buffer-name root target) buffer))
+      (swap! state assoc
+        :project-root root
+        :regit-root root
+        :regit-log-target target
+        :regit-log-limit limit
+        :label (log-buffer-label root target))
+      (set-window-buffer buffer window)
+      (binding [*buffer* buffer
+                *window* window]
+        (when-not existing
+          (mode/activate-mode :regit-log))
+        (render-log-buffer! buffer root target limit))
+      (when window
+        (move-cursor 0 false window)
+        (set-scroll-offset 0 window)))
+    buffer))
+
+(defn ^:interactive regit-log-current []
+  (if-let [root (project/current-project-root)]
+    (open-log-buffer! root)
+    (message "No git project found for the current buffer")))
+
+(defn regit-log-target [root target]
+  (open-log-buffer! root target))
+
+(defn ^:interactive regit-log []
+  (let [return-window (focused-window)
+        actions {"l" {:label "current"
+                      :fn (fn [_] (regit-log-current))}}
+        layout ["Regit log"
+                {:action "l"}]]
+    (regit-command/regit-command
+      {:args {}
+       :actions actions
+       :layout layout
+       :return-window return-window})))
