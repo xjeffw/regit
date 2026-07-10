@@ -8,6 +8,7 @@
             [regit.command :as regit-command]
             [regit.preview :as regit-preview]
             [regit.reset :refer [regit-reset]]
+            [regit.util :refer [git-cmd!]]
             [regit.view-commit :refer [regit-view-commit]]
             [rex.base.project :as project]
             [rex.ui.hl-line]
@@ -105,11 +106,8 @@
                              0
                              (read-string date)))})))))))
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
 (defn- get-git-output [root & args]
-  (let [result (apply git-cmd root args)]
+  (let [result (apply git-cmd! root args)]
     (when (zero? (:code result))
       (str/trim (:out result)))))
 

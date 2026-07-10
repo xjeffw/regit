@@ -7,7 +7,7 @@
             [rex.base.keys :as keys :refer [make-keymap map!]]
             [rex.ui.simple-prompt :as simple-prompt]
             [rex.ui.iselect :as iselect]
-            [regit.util :refer [with-status-buffer-pending]]
+            [regit.util :refer [git-cmd! with-status-buffer-pending]]
             [regit.push :refer [regit-push]]
             [regit.fetch :refer [regit-fetch]]
             [regit.pull :refer [regit-pull]]
@@ -135,9 +135,6 @@
                                            :include-patch? true
                                            :include-entry? true}))
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
 (defn- result-details [result]
   (->> [(:err result) (:out result)]
     (map str/trim)
@@ -150,8 +147,8 @@
       (str operation " failed (exit " (:code result) ")")
       (str operation " failed: " details))))
 
-(defn- git-cmd! [root operation & args]
-  (let [result (apply git-cmd root args)]
+(defn- git-cmd-checked! [root operation & args]
+  (let [result (apply git-cmd! root args)]
     (when-not (zero? (:code result))
       (throw (ex-info (git-command-error operation result) {:result result})))
     result))
@@ -163,10 +160,10 @@
   (get conflict-status-labels (str status) "unmerged"))
 
 (defn- conflict-diff [root path]
-  (let [combined (git-cmd root "diff" "--cc" "--no-ext-diff" "--" path)
+  (let [combined (git-cmd! root "diff" "--cc" "--no-ext-diff" "--" path)
         combined-out (when (zero? (:code combined)) (:out combined))
         plain (when (str/blank? (or combined-out ""))
-                (git-cmd root "diff" "--no-ext-diff" "--" path))
+                (git-cmd! root "diff" "--no-ext-diff" "--" path))
         plain-out (when (and plain (zero? (:code plain))) (:out plain))
         diff (or (when-not (str/blank? (or combined-out "")) combined-out)
                (when-not (str/blank? (or plain-out "")) plain-out))]
@@ -188,7 +185,7 @@
            :diff (conflict-diff root path)})))))
 
 (defn- unmerged-status-entries [root]
-  (let [result (git-cmd root "status" "--porcelain=v1" "--untracked-files=all")]
+  (let [result (git-cmd! root "status" "--porcelain=v1" "--untracked-files=all")]
     (if (zero? (:code result))
       (vec (keep #(porcelain-conflict-entry root %) (str/split-lines (:out result))))
       [])))
@@ -584,25 +581,25 @@
     (case stage
       :ours
       (if (remove-conflict-file-for-stage? entry :ours)
-        (git-cmd! root "git rm" "rm" "--" path)
+        (git-cmd-checked! root "git rm" "rm" "--" path)
         (do
-          (git-cmd! root "git checkout --ours" "checkout" "--ours" "--" path)
-          (git-cmd! root "git add -u" "add" "-u" "--" path)))
+          (git-cmd-checked! root "git checkout --ours" "checkout" "--ours" "--" path)
+          (git-cmd-checked! root "git add -u" "add" "-u" "--" path)))
 
       :theirs
       (if (remove-conflict-file-for-stage? entry :theirs)
-        (git-cmd! root "git rm" "rm" "--" path)
+        (git-cmd-checked! root "git rm" "rm" "--" path)
         (do
-          (git-cmd! root "git checkout --theirs" "checkout" "--theirs" "--" path)
-          (git-cmd! root "git add -u" "add" "-u" "--" path)))
+          (git-cmd-checked! root "git checkout --theirs" "checkout" "--theirs" "--" path)
+          (git-cmd-checked! root "git add -u" "add" "-u" "--" path)))
 
       :conflict
-      (git-cmd! root "git checkout --merge" "checkout" "--merge" "--" path))))
+      (git-cmd-checked! root "git checkout --merge" "checkout" "--merge" "--" path))))
 
 (defn- perform-file-operation! [root section operation entry & [opts]]
   (case operation
     :stage (if (conflict-entry? entry)
-             (git-cmd! root "git add -u" "add" "-u" "--" (:path entry))
+             (git-cmd-checked! root "git add -u" "add" "-u" "--" (:path entry))
              (git-stage-entry root entry))
     :unstage (git-unstage-entry root entry)
     :discard (if (conflict-entry? entry)
@@ -728,13 +725,13 @@
   (let [path (:path entry)]
     (case stage
       :ours
-      (let [result (git-cmd root "show" (str ":2:" path))]
+      (let [result (git-cmd! root "show" (str ":2:" path))]
         (if (zero? (:code result))
           (:out result)
           "(deleted by our stage)\n"))
 
       :theirs
-      (let [result (git-cmd root "show" (str ":3:" path))]
+      (let [result (git-cmd! root "show" (str ":3:" path))]
         (if (zero? (:code result))
           (:out result)
           "(deleted by their stage)\n"))

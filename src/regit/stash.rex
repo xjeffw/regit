@@ -1,7 +1,7 @@
 (ns regit.stash
   (:require [regit.command :refer [regit-command]]
             [regit.diff :as regit-diff]
-            [regit.util :refer [with-status-buffer-pending]]
+            [regit.util :refer [git-cmd! with-status-buffer-pending]]
             [rex.ui.iselect :as iselect]
             [rex.ui.simple-prompt :as simple-prompt]
             [rex.base.hook :refer [run-hooks]]
@@ -17,12 +17,6 @@
 
 (declare render-stashes-buffer!)
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
-(defn- git-cmd-env [root env & args]
-  (run-shell* "git" (into ["-C" (str root)] args) {:env env}))
-
 (defn- git-command-error [operation result]
   (let [{:keys [code out err]} result]
     (when-not (zero? code)
@@ -36,8 +30,8 @@
 
 (defn- git-output! [root operation args & [env]]
   (let [result (if env
-                 (apply git-cmd-env root env args)
-                 (apply git-cmd root args))
+                 (apply git-cmd! root {:env env} args)
+                 (apply git-cmd! root args))
         error (git-command-error operation result)]
     (when error
       (throw (ex-info error {:operation operation :result result})))
@@ -48,7 +42,7 @@
   nil)
 
 (defn- git-lines [root & args]
-  (let [result (apply git-cmd root args)]
+  (let [result (apply git-cmd! root args)]
     (if (zero? (:code result))
       (->> (str/split-lines (or (:out result) ""))
         (map str/trim)
@@ -57,7 +51,7 @@
       [])))
 
 (defn- git-quiet-diff? [root & args]
-  (zero? (:code (apply git-cmd root args))))
+  (zero? (:code (apply git-cmd! root args))))
 
 (defn- staged-changes? [root]
   (not (git-quiet-diff? root "diff" "--cached" "--quiet" "--ignore-submodules" "--")))
@@ -321,7 +315,7 @@
       (git-stash-apply root stash-id true))))
 
 (defn- current-ref-for-wip [root]
-  (let [result (git-cmd root "symbolic-ref" "HEAD")]
+  (let [result (git-cmd! root "symbolic-ref" "HEAD")]
     (if (zero? (:code result))
       (str/trim (:out result))
       "HEAD")))
@@ -332,7 +326,7 @@
 (defn- update-wip-ref! [root kind tree message]
   (let [ref (current-ref-for-wip root)
         target-ref (wip-ref kind ref)
-        parent (let [result (git-cmd root "rev-parse" "--verify" target-ref)]
+        parent (let [result (git-cmd! root "rev-parse" "--verify" target-ref)]
                  (if (zero? (:code result))
                    (str/trim (:out result))
                    "HEAD"))

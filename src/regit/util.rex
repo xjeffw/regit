@@ -19,11 +19,16 @@
            (f#)))
        (f#))))
 
-(defn- git-cmd-env [root env & args]
-  (run-shell* "git" (into ["-C" (str root)] args) {:env env}))
+(defn git-cmd! [root & args]
+  (let [options (when (map? (first args)) (first args))
+        args (if options (rest args) args)
+        options (if options
+                  (assoc options :direnv false)
+                  {:direnv false})]
+    (run-shell* "git" (into ["-C" (str root)] args) options)))
 
 (defn- get-git-output [root & args]
-  (let [result (apply git-cmd-env root {} args)]
+  (let [result (apply git-cmd! root args)]
     (when (zero? (:code result))
       (str/trim (:out result)))))
 
@@ -209,7 +214,7 @@
         env (merge (or env {}) (editor-env state))
         git-task (future
                    (with-status-buffer-pending root
-                     (apply git-cmd-env root env args)))]
+                     (apply git-cmd! root {:env env} args)))]
     (case (wait-for-git-or-editor! state git-task)
       :editor
       (do

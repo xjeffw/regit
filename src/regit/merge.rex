@@ -1,6 +1,6 @@
 (ns regit.merge
   (:require [regit.command :as regit-command :refer [regit-command]]
-            [regit.util :as regit-util :refer [with-status-buffer-pending]]
+            [regit.util :as regit-util :refer [git-cmd! with-status-buffer-pending]]
             [rex.ui.iselect :as iselect]
             [rex.base.hook :refer [run-hooks]]
             [rex.base.keys :refer [make-keymap map!]]
@@ -13,11 +13,8 @@
 
 (def merge-strategies ["resolve" "recursive" "octopus" "ours" "subtree"])
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
 (defn- get-git-output [root & args]
-  (let [result (apply git-cmd root args)]
+  (let [result (apply git-cmd! root args)]
     (when (zero? (:code result))
       (str/trim (:out result)))))
 
@@ -27,7 +24,7 @@
     (catch _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
 
 (defn- branch-exists? [root branch]
-  (zero? (:code (git-cmd root "show-ref" "--verify" "--quiet" (str "refs/heads/" branch)))))
+  (zero? (:code (git-cmd! root "show-ref" "--verify" "--quiet" (str "refs/heads/" branch)))))
 
 (defn- git-dir [root]
   (let [dir (get-git-output root "rev-parse" "--git-dir")]
@@ -93,7 +90,7 @@
 (defn- run-git! [root operation args & [opts]]
   (let [opts (or opts {})]
     (with-status-buffer-pending root
-      (run-git-result! root operation (apply git-cmd root args) opts))))
+      (run-git-result! root operation (apply git-cmd! root args) opts))))
 
 (defn- run-git-with-commit-editor! [root operation env args & [opts]]
   (let [opts (or opts {})]
@@ -348,7 +345,7 @@
         args (if (str/blank? (or base ""))
                ["merge-tree" "HEAD" rev]
                ["merge-tree" base "HEAD" rev])]
-    (apply git-cmd root args)))
+    (apply git-cmd! root args)))
 
 (defn- merge-preview-buffer-name [root rev]
   (str "*regit-merge-preview: " (or (path-filename root) root) " " rev "*"))

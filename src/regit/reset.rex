@@ -1,7 +1,7 @@
 (ns regit.reset
   (:require [regit.command :refer [regit-command]]
             [regit.diff :as regit-diff]
-            [regit.util :refer [with-status-buffer-pending]]
+            [regit.util :refer [git-cmd! with-status-buffer-pending]]
             [rex.ui.iselect :as iselect]
             [rex.base.project :as project]
             [rex.base.buffer :as buffer]
@@ -32,14 +32,8 @@
 
 (def special-refnames ["HEAD" "ORIG_HEAD" "FETCH_HEAD" "MERGE_HEAD" "CHERRY_PICK_HEAD"])
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
-(defn- git-cmd-env [root env & args]
-  (run-shell* "git" (into ["-C" (str root)] args) {:env env}))
-
 (defn- get-git-output [root & args]
-  (let [result (apply git-cmd root args)]
+  (let [result (apply git-cmd! root args)]
     (when (zero? (:code result))
       (str/trim (:out result)))))
 
@@ -80,7 +74,7 @@
   (ref-lines root "refs/heads" "refs/remotes" "refs/tags"))
 
 (defn- rev-exists? [root rev]
-  (zero? (:code (git-cmd root "rev-parse" "--verify" "--quiet" rev))))
+  (zero? (:code (git-cmd! root "rev-parse" "--verify" "--quiet" rev))))
 
 (defn- existing-special-refnames [root]
   (vec (filter #(rev-exists? root %) special-refnames)))
@@ -136,7 +130,7 @@
 (defn- run-git! [root operation args & [opts]]
   (let [opts (or opts {})]
     (with-status-buffer-pending root
-      (run-git-result! root operation (apply git-cmd root args) opts))))
+      (run-git-result! root operation (apply git-cmd! root args) opts))))
 
 (defn- run-worktree-reset! [root target & [opts]]
   (let [opts (or opts {})
@@ -144,9 +138,9 @@
         env {"GIT_INDEX_FILE" index-path}]
     (try
       (ignore-errors (delete-file index-path))
-      (let [read-result (git-cmd-env root env "read-tree" target)
+      (let [read-result (git-cmd! root {:env env} "read-tree" target)
             checkout-result (if (zero? (:code read-result))
-                              (git-cmd-env root env "checkout-index" "--all" "--force")
+                              (git-cmd! root {:env env} "checkout-index" "--all" "--force")
                               read-result)]
         (with-status-buffer-pending root
           (run-git-result! root "Reset worktree" checkout-result opts)))

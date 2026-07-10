@@ -1,16 +1,14 @@
 (ns regit.fetch
   (:require [regit.command :as regit-command :refer [regit-command]]
+            [regit.util :refer [git-cmd!]]
             [rex.string :as str]
             [rex.base.project :as project]
             [rex.ui.iselect :as iselect]
             [rex.base.buffer :as buffer])
   (:use rex.core rex.builtins))
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
 (defn- get-git-output [root & args]
-  (let [result (apply git-cmd root args)]
+  (let [result (apply git-cmd! root args)]
     (when (zero? (:code result))
       (str/trim (:out result)))))
 
@@ -43,7 +41,7 @@
     (message (str "Running: git " (str/join " " cmd-args)))
     (future
       (with-buffer-pending (call-var regit.status/find-status-buffer root)
-        (let [{:keys [code out err]} (apply git-cmd root cmd-args)]
+        (let [{:keys [code out err]} (apply git-cmd! root cmd-args)]
           (let [details (->> [err out]
                           (map str/trim)
                           (remove str/blank?)

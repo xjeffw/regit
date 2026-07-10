@@ -1,6 +1,6 @@
 (ns regit.branch
   (:require [regit.command :as regit-command :refer [regit-command]]
-            [regit.util :refer [with-status-buffer-pending]]
+            [regit.util :refer [git-cmd! with-status-buffer-pending]]
             [rex.ui.iselect :as iselect]
             [rex.ui.simple-prompt :as simple-prompt]
             [rex.base.project :as project]
@@ -10,9 +10,6 @@
   (:use rex.core rex.builtins))
 
 (declare run-git! refresh-after-result! open-branch-command! regit-branch-configure)
-
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
 
 (defn- current-branch [root]
   (git-current-branch root))
@@ -75,7 +72,7 @@
 (defn- git-config-set! [root key value]
   (frame/with-render-coalescing-if-needed
     (let [args ["config" key value]
-          result (apply git-cmd root args)
+          result (apply git-cmd! root args)
           err (git-command-error args result)]
       (when-not err
         (git-clear-repo-cache))
@@ -84,7 +81,7 @@
 (defn- git-config-unset! [root key]
   (frame/with-render-coalescing-if-needed
     (let [args ["config" "--unset" key]
-          result (apply git-cmd root args)]
+          result (apply git-cmd! root args)]
       (if (= 5 (:code result))
         nil
         (let [err (git-command-error args result)]
@@ -102,7 +99,7 @@
 
 (defn- run-git! [root & args]
   (with-status-buffer-pending root
-    (let [{:keys [code out err]} (apply git-cmd root args)
+    (let [{:keys [code out err]} (apply git-cmd! root args)
           details (->> [err out]
                     (map str/trim)
                     (remove str/blank?)

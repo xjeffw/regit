@@ -1,6 +1,6 @@
 (ns regit.remote
   (:require [regit.command :as regit-command :refer [regit-command]]
-            [regit.util :refer [with-status-buffer-pending]]
+            [regit.util :refer [git-cmd! with-status-buffer-pending]]
             [rex.ui.iselect :as iselect]
             [rex.ui.simple-prompt :as simple-prompt]
             [rex.base.project :as project]
@@ -18,9 +18,6 @@
 
 (def tagopt-choices ["--no-tags" "--tags"])
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
 (defn- result-details [result]
   (->> [(:err result) (:out result)]
     (map str/trim)
@@ -36,14 +33,14 @@
 
 (defn- run-git! [root & args]
   (with-status-buffer-pending root
-    (let [result (apply git-cmd root args)
+    (let [result (apply git-cmd! root args)
           err (git-command-error args result)]
       (when-not err
         (git-clear-repo-cache))
       err)))
 
 (defn- git-output [root & args]
-  (let [result (apply git-cmd root args)]
+  (let [result (apply git-cmd! root args)]
     (when (zero? (:code result))
       (str/trim (:out result)))))
 
@@ -71,7 +68,7 @@
   (let [args (vec (concat ["config"]
                     (config-scope-args scope)
                     ["--get-all" key]))
-        result (apply git-cmd root args)]
+        result (apply git-cmd! root args)]
     (if (zero? (:code result))
       (vec (remove str/blank? (str/split-lines (:out result))))
       [])))
@@ -79,7 +76,7 @@
 (defn- git-config-set! [root key value]
   (frame/with-render-coalescing-if-needed
     (let [args ["config" key value]
-          result (apply git-cmd root args)
+          result (apply git-cmd! root args)
           err (git-command-error args result)]
       (when-not err
         (git-clear-repo-cache))
@@ -88,7 +85,7 @@
 (defn- git-config-add! [root key value]
   (frame/with-render-coalescing-if-needed
     (let [args ["config" "--add" key value]
-          result (apply git-cmd root args)
+          result (apply git-cmd! root args)
           err (git-command-error args result)]
       (when-not err
         (git-clear-repo-cache))
@@ -97,7 +94,7 @@
 (defn- git-config-unset! [root key]
   (frame/with-render-coalescing-if-needed
     (let [args ["config" "--unset" key]
-          result (apply git-cmd root args)]
+          result (apply git-cmd! root args)]
       (if (= 5 (:code result))
         nil
         (let [err (git-command-error args result)]
@@ -108,7 +105,7 @@
 (defn- git-config-unset-all! [root key]
   (frame/with-render-coalescing-if-needed
     (let [args ["config" "--unset-all" key]
-          result (apply git-cmd root args)]
+          result (apply git-cmd! root args)]
       (if (= 5 (:code result))
         nil
         (let [err (git-command-error args result)]

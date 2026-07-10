@@ -1,5 +1,6 @@
 (ns regit.log-select
-  (:require [rex.base.mode :as mode]
+  (:require [regit.util :refer [git-cmd!]]
+            [rex.base.mode :as mode]
             [rex.base.buffer :as buffer]
             [rex.base.frame :as frame]
             [rex.base.keys :refer [make-keymap map!]]
@@ -11,11 +12,8 @@
 
 (def log-select-limit 256)
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
 (defn- get-git-output [root & args]
-  (let [result (apply git-cmd root args)]
+  (let [result (apply git-cmd! root args)]
     (when (zero? (:code result))
       (str/trim (:out result)))))
 

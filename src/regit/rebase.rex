@@ -1,7 +1,7 @@
 (ns regit.rebase
   (:require [regit.command :as regit-command :refer [regit-command]]
             [regit.log-select :as log-select]
-            [regit.util :as regit-util :refer [with-status-buffer-pending]]
+            [regit.util :as regit-util :refer [git-cmd! with-status-buffer-pending]]
             [rex.ui.iselect :as iselect]
             [rex.ui.simple-prompt :as simple-prompt]
             [rex.base.hook :refer [run-hooks]]
@@ -34,14 +34,8 @@
   run-rebase-edit-todo!
   run-rebase-abort!)
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
-(defn- git-cmd-env [root env & args]
-  (run-shell* "git" (into ["-C" (str root)] args) {:env env}))
-
 (defn- get-git-output [root & args]
-  (let [result (apply git-cmd root args)]
+  (let [result (apply git-cmd! root args)]
     (when (zero? (:code result))
       (str/trim (:out result)))))
 
@@ -136,12 +130,12 @@
 (defn- run-git! [root operation args & [opts]]
   (let [opts (or opts {})]
     (with-status-buffer-pending root
-      (run-git-result! root operation (apply git-cmd root args) opts))))
+      (run-git-result! root operation (apply git-cmd! root args) opts))))
 
 (defn- run-git-env! [root operation env args & [opts]]
   (let [opts (or opts {})]
     (with-status-buffer-pending root
-      (run-git-result! root operation (apply git-cmd-env root env args) opts))))
+      (run-git-result! root operation (apply git-cmd! root {:env env} args) opts))))
 
 (defn- run-git-with-commit-editor! [root operation env args & [opts]]
   (let [opts (or opts {})]
@@ -367,7 +361,7 @@
   (let [todo-path (temp-file-path "git-rebase-todo")
         editor-script (capture-editor-script todo-path)
         env {"GIT_SEQUENCE_EDITOR" (str "sh " editor-script)}
-        result (apply git-cmd-env root env command-args)]
+        result (apply git-cmd! root {:env env} command-args)]
     (if (and (not (path-exists? todo-path))
           (not (zero? (:code result))))
       (let [msg (git-error-message "Interactive rebase" result)]
