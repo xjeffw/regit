@@ -19,6 +19,7 @@
             [regit.rebase :as rebase :refer [regit-rebase]]
             [regit.reset :refer [regit-reset]]
             [regit.branch :refer [regit-branch]]
+            [regit.worktree :refer [regit-worktree]]
             [regit.log :refer [regit-log regit-log-target]]
             [regit.diff :as regit-diff]
             [regit.preview :as regit-preview]
@@ -1263,6 +1264,7 @@
    "F" {:label "pull" :fn #'regit-pull}
    "M" {:label "remote" :fn #'regit-remote}
    "b" {:label "branch" :fn #'regit-branch}
+   "Z" {:label "worktree" :fn #'regit-worktree}
    "x" {:label "discard" :fn #'regit-discard}
    "c" {:label "commit" :fn #'regit-commit}
    "m" {:label "merge" :fn #'regit-merge}
@@ -1277,7 +1279,7 @@
    "q" {:label "quit" :fn #'close-buffer}})
 
 (def regit-status-command-order
-  ["s" "u" "f" "F" "M" "b" "x" "c" "m" "r" "O" "l" "z" "P" "a" "<enter>" "C-<enter>" "q" "?"])
+  ["s" "u" "f" "F" "M" "b" "Z" "x" "c" "m" "r" "O" "l" "z" "P" "a" "<enter>" "C-<enter>" "q" "?"])
 
 (def regit-status-command-sections
   [["Transient and dwim commands"
@@ -1292,6 +1294,7 @@
      ["r" "Rebase"]
      ["O" "Reset"]
      ["z" "Stash"]
+     ["Z" "Worktree"]
      ["?" "Help"]]]
    ["Applying changes"
     [["a" "Apply"]

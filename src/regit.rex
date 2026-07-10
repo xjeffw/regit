@@ -21,3 +21,4 @@
 (require 'regit.view-commit)
 (require 'regit.view-diff)
 (require 'regit.view-stash)
+(require 'regit.worktree)

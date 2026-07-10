@@ -673,6 +673,7 @@
                             "Log"
                             "Push"
                             "Stash"
+                            "Worktree"
                             "Help"
                             "Apply"
                             "Stage"
@@ -701,7 +702,7 @@
                     *window* ui-win
                     *mode* :regit-command
                     *submodes* #{}]
-            (doseq [key ["b" "c" "f" "F" "l" "P" "z" "?" "a" "s" "u" "x" "q" "<enter>" "C-<enter>"]]
+            (doseq [key ["b" "c" "f" "F" "l" "P" "z" "Z" "?" "a" "s" "u" "x" "q" "<enter>" "C-<enter>"]]
               (test/assert (ifn? (regit-command/regit-command-keymap (keys/parse-key-sequence key)))
                 (str "missing regit status help command key: " key)))
             (let [close-cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "q"))]

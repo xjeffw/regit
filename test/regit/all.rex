@@ -17,3 +17,4 @@
 (require 'regit.tests.view-commit)
 (require 'regit.tests.view-diff)
 (require 'regit.tests.view-stash)
+(require 'regit.tests.worktree)

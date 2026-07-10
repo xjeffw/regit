@@ -1,0 +1,312 @@
+(ns regit.worktree
+  (:require [regit.command :refer [regit-command]]
+            [regit.util :refer [git-cmd!]]
+            [rex.base.project :as project]
+            [rex.string :as str]
+            [rex.ui.iselect :as iselect]
+            [rex.ui.simple-prompt :as simple-prompt])
+  (:use rex.core rex.builtins))
+
+(def special-refnames
+  ["HEAD" "ORIG_HEAD" "FETCH_HEAD" "MERGE_HEAD" "CHERRY_PICK_HEAD"])
+
+(def iselect-options
+  {:complete-fn #'iselect/complete-to-first-and-select
+   :sync-input-on-move? false
+   :preserve-selection? true
+   :clear-selection-on-input? true})
+
+(defn- git-error [operation result]
+  (when-not (zero? (:code result))
+    (let [details (->> [(:err result) (:out result)]
+                    (map str/trim)
+                    (remove str/blank?)
+                    (str/join "\n"))]
+      (if (str/blank? details)
+        (str operation " failed")
+        (str operation " failed:\n" details)))))
+
+(defn- parse-worktree-block [block]
+  (reduce
+    (fn [worktree line]
+      (cond
+        (str/starts-with? line "worktree ") (assoc worktree :path (subs line 9))
+        (str/starts-with? line "HEAD ") (assoc worktree :head (subs line 5))
+        (str/starts-with? line "branch refs/heads/") (assoc worktree :branch (subs line 18))
+        (= line "detached") (assoc worktree :detached? true)
+        (= line "bare") (assoc worktree :bare? true)
+        (str/starts-with? line "locked") (assoc worktree :locked? true
+                                                   :lock-reason (str/trim (subs line 6)))
+        (str/starts-with? line "prunable") (assoc worktree :prunable? true
+                                                     :prune-reason (str/trim (subs line 8)))
+        :else worktree))
+    {}
+    (str/split block #"\r?\n")))
+
+(defn list-worktrees [root]
+  (let [result (git-cmd! root "worktree" "list" "--porcelain")]
+    (if-let [error (git-error "List worktrees" result)]
+      {:error error :worktrees []}
+      {:worktrees (->> (str/split (str/trim (:out result)) #"\r?\n\r?\n")
+                    (remove str/blank?)
+                    (mapv parse-worktree-block))})))
+
+(defn- worktrees [root]
+  (:worktrees (list-worktrees root)))
+
+(defn- primary-worktree [root]
+  (first (worktrees root)))
+
+(defn- same-path? [left right]
+  (and left right
+    (= (str (path-canonicalize left))
+      (str (path-canonicalize right)))))
+
+(defn- selected-value [input selected-entry]
+  (let [selected (when selected-entry (str selected-entry))]
+    (str/trim (if (str/blank? selected) (str input) selected))))
+
+(defn- select-value [prompt entries empty-message on-select]
+  (iselect/iselect
+    prompt
+    (fn [_input] entries)
+    (fn [_entry] nil)
+    (assoc iselect-options
+      :submit-fn (fn [input selected-entry]
+                   (let [value (selected-value input selected-entry)]
+                     (if (str/blank? value)
+                       (do
+                         (message empty-message)
+                         :keep-open)
+                       (let [result (on-select value)]
+                         (if (string? result)
+                           (fn [] (message result))
+                           result))))))))
+
+(defn- local-branch? [root target]
+  (contains? (set (git-local-branches root)) target))
+
+(defn checkout-targets [root]
+  (let [checked-out (set (keep :branch (worktrees root)))]
+    (vec
+      (remove #(contains? checked-out %)
+        (distinct
+          (concat
+            (git-local-branches root)
+            (git-remote-branches root)
+            (git-tags root)
+            (git-existing-refs root special-refnames)))))))
+
+(defn- worktree-name-prefix [root]
+  (let [name (or (path-filename root) "worktree")
+        underscore (str/index-of name "_")]
+    (if underscore (subs name 0 underscore) name)))
+
+(defn worktree-directory-default [root branch]
+  (let [branch (when branch (str/replace (str branch) "/" "-"))]
+    (path-join (or (path-parent root) root)
+      (str (worktree-name-prefix root) "_" branch))))
+
+(defn- visit-worktree! [directory]
+  (git-clear-repo-cache)
+  (call-var regit.status/regit-status directory))
+
+(defn worktree-add! [root directory target]
+  (git-error "Create worktree"
+    (git-cmd! root "worktree" "add" directory target)))
+
+(defn worktree-add-branch! [root directory branch start-point]
+  (git-error "Create branch and worktree"
+    (git-cmd! root "worktree" "add" "-b" branch directory start-point)))
+
+(defn- prompt-worktree-directory [root target branch on-submit]
+  (simple-prompt/simple-prompt
+    {:name :regit-worktree-directory
+     :prompt (str "Checkout " target " in new worktree:")
+     :initial-input (str (worktree-directory-default root branch))
+     :on-submit (fn [input]
+                  (let [directory (str/trim input)]
+                    (if (str/blank? directory)
+                      (message "Worktree directory required")
+                      (if-let [error (on-submit directory)]
+                        (message error)
+                        (visit-worktree! directory)))))}))
+
+(defn- prompt-worktree-checkout [root]
+  (select-value "In new worktree; checkout:"
+    (checkout-targets root)
+    "No branch or revision selected"
+    (fn [target]
+      (fn []
+        (prompt-worktree-directory root target
+          (when (local-branch? root target) target)
+          (fn [directory]
+            (worktree-add! root directory target)))))))
+
+(defn- branch-start-targets [root]
+  (vec (distinct
+         (concat
+           (git-local-branches root)
+           (git-remote-branches root)
+           (git-tags root)
+           (git-existing-refs root special-refnames)))))
+
+(defn- prompt-worktree-start-point [root branch]
+  (select-value (str "In new worktree; checkout new branch " branch " starting at:")
+    (branch-start-targets root)
+    "No starting point selected"
+    (fn [start-point]
+      (fn []
+        (prompt-worktree-directory root branch branch
+          (fn [directory]
+            (worktree-add-branch! root directory branch start-point)))))))
+
+(defn- prompt-worktree-branch [root]
+  (simple-prompt/simple-prompt
+    {:name :regit-worktree-branch
+     :prompt "In new worktree; checkout new branch named:"
+     :initial-input ""
+     :on-submit (fn [input]
+                  (let [branch (str/trim input)]
+                    (if (str/blank? branch)
+                      (message "Branch name required")
+                      (prompt-worktree-start-point root branch))))}))
+
+(defn- secondary-worktree-paths [root]
+  (mapv :path (rest (worktrees root))))
+
+(defn- other-worktree-paths [root]
+  (mapv :path
+    (remove #(same-path? root (:path %)) (worktrees root))))
+
+(defn move-worktree! [root worktree directory]
+  (if-let [primary (:path (primary-worktree root))]
+    (if (same-path? worktree primary)
+      "You may not move the main working tree"
+      (git-error "Move worktree"
+        (git-cmd! root "worktree" "move" worktree directory)))
+    "Cannot determine the main working tree"))
+
+(defn- moved-worktree-path [worktree directory]
+  (if (path-dir? directory)
+    (path-join directory (path-filename worktree))
+    directory))
+
+(defn- finish-worktree-change! [old-root new-root]
+  (git-clear-repo-cache)
+  (when (and old-root (not= old-root new-root))
+    (when-let [buffer (call-var regit.status/find-status-buffer old-root)]
+      (kill-buffer buffer)))
+  (call-var regit.status/regit-status new-root))
+
+(defn- prompt-move-worktree [root]
+  (let [paths (secondary-worktree-paths root)]
+    (if (seq paths)
+      (select-value "Move worktree:" paths "No worktree selected"
+        (fn [worktree]
+          (fn []
+            (simple-prompt/simple-prompt
+              {:name :regit-worktree-move
+               :prompt "Move worktree to:"
+               :initial-input ""
+               :on-submit (fn [input]
+                            (let [directory (str/trim input)]
+                              (if (str/blank? directory)
+                                (message "Destination directory required")
+                                (let [new-path (moved-worktree-path worktree directory)
+                                      moving-current? (same-path? root worktree)]
+                                  (if-let [error (move-worktree! root worktree directory)]
+                                    (message error)
+                                    (if moving-current?
+                                      (finish-worktree-change! root new-path)
+                                      (call-var regit.status/refresh-status! root)))))))}))))
+      (message "No linked worktrees"))))
+
+(defn worktree-dirty? [worktree]
+  (let [result (git-cmd! worktree "status" "--porcelain")]
+    (and (zero? (:code result))
+      (not (str/blank? (:out result))))))
+
+(defn delete-worktree! [root worktree]
+  (if-let [primary (:path (primary-worktree root))]
+    (if (same-path? worktree primary)
+      "Deleting the main working tree would delete the shared .git directory"
+      (if (path-exists? worktree)
+        (git-error "Delete worktree"
+          (git-cmd! root "worktree" "remove" "--force" worktree))
+        (git-error "Prune worktrees"
+          (git-cmd! primary "worktree" "prune"))))
+    "Cannot determine the main working tree"))
+
+(defn- confirmed? [input]
+  (= "y" (str/lower-case (str/trim input))))
+
+(defn- confirm-delete-worktree [root worktree return-window]
+  (let [dirty? (worktree-dirty? worktree)
+        name (or (path-filename worktree) worktree)
+        deleting-current? (same-path? root worktree)
+        primary (:path (primary-worktree root))]
+    (simple-prompt/simple-prompt
+      {:name :regit-worktree-delete
+       :prompt (str "Delete worktree \"" name "\""
+                 (when dirty? " despite uncommitted changes")
+                 "? Type [y] to confirm:")
+       :autosubmit #"."
+       :target-window return-window
+       :on-submit (fn [input]
+                    (when (confirmed? input)
+                      (if-let [error (delete-worktree! root worktree)]
+                        (message error)
+                        (do
+                          (git-clear-repo-cache)
+                          (if deleting-current?
+                            (finish-worktree-change! root primary)
+                            (call-var regit.status/refresh-status! root))))))})))
+
+(defn- prompt-delete-worktree [root return-window]
+  (let [paths (secondary-worktree-paths root)]
+    (if (seq paths)
+      (select-value "Delete worktree:" paths "No worktree selected"
+        (fn [worktree]
+          (fn [] (confirm-delete-worktree root worktree return-window))))
+      (message "No linked worktrees"))))
+
+(defn- prompt-visit-worktree [root]
+  (let [paths (other-worktree-paths root)]
+    (if (seq paths)
+      (select-value "Show status for worktree:" paths "No worktree selected"
+        (fn [worktree]
+          (fn [] (visit-worktree! worktree))))
+      (message "No other worktrees"))))
+
+(defn- worktree-layout []
+  [{:horizontal-sections
+    [{:section "Create new"
+      :items [{:action "b"}
+              {:action "c"}]}
+     {:section "Commands"
+      :items [{:action "m"}
+              {:action "k"}
+              {:action "g"}]}]
+    :gap "     "}])
+
+(defn open-worktree-command! [root return-window]
+  (regit-command
+    {:args {}
+     :return-window return-window
+     :actions {"b" {:label "worktree"
+                    :fn (fn [_args] (prompt-worktree-checkout root))}
+               "c" {:label "branch and worktree"
+                    :fn (fn [_args] (prompt-worktree-branch root))}
+               "m" {:label "Move worktree"
+                    :fn (fn [_args] (prompt-move-worktree root))}
+               "k" {:label "Delete worktree"
+                    :fn (fn [_args] (prompt-delete-worktree root return-window))}
+               "g" {:label "Visit worktree"
+                    :fn (fn [_args] (prompt-visit-worktree root))}}
+     :layout (worktree-layout)}))
+
+(defn ^:interactive regit-worktree [& [root]]
+  (if-let [root (or root (project/current-project-root))]
+    (open-worktree-command! (str root) (focused-window))
+    (message "Not in a git repository")))
