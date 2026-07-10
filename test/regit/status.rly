@@ -1,0 +1,1879 @@
+(ns regit.tests.status
+  (:require [regit.status :as status]
+            [regit.tests.util :refer [buffer-content-lines git! git-cmd sh!]]
+            [relay.base.buffer :as buffer]
+            [relay.base.frame :as frame]
+            [relay.base.keys :as keys]
+            [relay.base.mode :as mode]
+            [regit.command :as regit-command]
+            [regit.diff :as regit-diff]
+            [regit.preview :as regit-preview]
+            [relay.string :as str]
+            [relay.ui.outline :as outline]
+            [relay.ui.iselect :as iselect]
+            [relay.ui.simple-prompt :as simple-prompt]
+            [relay.test :as test :refer [deftest is= is-error]]))
+
+(defn- get-git-output [root & args]
+  (let [result (apply git-cmd root args)]
+    (when (zero? (:code result))
+      (str/trim (:out result)))))
+
+(defn- get-git-output-raw [root & args]
+  (let [result (apply git-cmd root args)]
+    (when (zero? (:code result))
+      (:out result))))
+
+(defn- init-conflicted-merge-repo-with-content [name base-content ours-content theirs-content]
+  (let [tmp-dir (temp-file-path name)
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (git! tmp-dir "init")
+        _ (git! tmp-dir "config" "user.name" "Relay Test")
+        _ (git! tmp-dir "config" "user.email" "relay@example.com")
+        conflict-path (path-join tmp-dir "conflict.txt")
+        _ (write-file conflict-path base-content)
+        _ (git! tmp-dir "add" "conflict.txt")
+        _ (git! tmp-dir "commit" "-m" "initial")
+        _ (git! tmp-dir "branch" "-M" "main")
+        _ (git! tmp-dir "checkout" "-b" "feature")
+        _ (write-file conflict-path theirs-content)
+        _ (git! tmp-dir "commit" "-am" "feature conflict")
+        _ (git! tmp-dir "checkout" "main")
+        _ (write-file conflict-path ours-content)
+        _ (git! tmp-dir "commit" "-am" "main conflict")
+        merge-result (git-cmd tmp-dir "merge" "feature")]
+    (test/assert (not (zero? (:code merge-result))) "merge should stop with a conflict")
+    (test/assert (path-exists? (path-join tmp-dir ".git" "MERGE_HEAD")) "MERGE_HEAD should exist")
+    tmp-dir))
+
+(defn- init-conflicted-merge-repo [name]
+  (init-conflicted-merge-repo-with-content name "base\n" "ours\n" "theirs\n"))
+
+(defn- init-special-conflict-repo [name conflict-kind]
+  (let [tmp-dir (temp-file-path name)
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (git! tmp-dir "init")
+        _ (git! tmp-dir "config" "user.name" "Relay Test")
+        _ (git! tmp-dir "config" "user.email" "relay@example.com")
+        conflict-path (path-join tmp-dir "conflict.txt")]
+    (if (= conflict-kind :both-added)
+      (git! tmp-dir "commit" "--allow-empty" "-m" "initial")
+      (do
+        (write-file conflict-path "base\n")
+        (git! tmp-dir "add" "conflict.txt")
+        (git! tmp-dir "commit" "-m" "initial")))
+    (git! tmp-dir "branch" "-M" "main")
+    (git! tmp-dir "checkout" "-b" "feature")
+    (case conflict-kind
+      :deleted-by-them (sh! "rm" ["-f" (str conflict-path)])
+      :deleted-by-us (write-file conflict-path "theirs\n")
+      :both-added (write-file conflict-path "theirs\n")
+      nil)
+    (git! tmp-dir "add" "-A")
+    (git! tmp-dir "commit" "-m" "feature conflict")
+    (git! tmp-dir "checkout" "main")
+    (case conflict-kind
+      :deleted-by-them (write-file conflict-path "ours\n")
+      :deleted-by-us (sh! "rm" ["-f" (str conflict-path)])
+      :both-added (write-file conflict-path "ours\n")
+      nil)
+    (git! tmp-dir "add" "-A")
+    (git! tmp-dir "commit" "-m" "main conflict")
+    (let [merge-result (git-cmd tmp-dir "merge" "feature")]
+      (test/assert (not (zero? (:code merge-result))) "merge should stop with a conflict")
+      (test/assert (path-exists? (path-join tmp-dir ".git" "MERGE_HEAD")) "MERGE_HEAD should exist")
+      tmp-dir)))
+
+(defn- unmerged-index [root]
+  (get-git-output root "ls-files" "-u" "--" "conflict.txt"))
+
+(deftest commit-line-hash-face-test
+  (let [line (status/commit-line {:id "abc1234" :refs [] :summary "summary"})]
+    (test/assert (property-string? line) "commit-line should preserve styled commit hash")
+    (test/assert (str/includes? line "abc1234 summary") "commit-line missing commit text")))
+
+(defn- find-cached-node [old-tree id]
+  (get (status/index-tree-nodes old-tree) id))
+
+(defn- find-line-index [lines pred]
+  (some (fn [i] (when (pred (nth lines i)) i)) (range (count lines))))
+
+(defn- find-line-index-after [lines start-idx pred]
+  (when (and start-idx (< start-idx (count lines)))
+    (some (fn [i] (when (pred (nth lines i)) i)) (range start-idx (count lines)))))
+
+(defn- move-to-line-containing! [buffer window lines needle & [start]]
+  (let [line (find-line-index-after lines (or start 0) #(str/includes? (str %) needle))]
+    (test/assert line (str "Could not find line containing " needle " in " lines))
+    (move-cursor (with-read-lock [lock (buffer-text buffer)] (buffer/line-to-char lock line)) false window)
+    line))
+
+(defn- wait-for-status-preview-buffer [status-buffer status-window target timeout-ms]
+  (test/wait-for [preview (or (regit-preview/wait-for-preview-buffer status-buffer target 50)
+                            (do
+                              (binding [*buffer* status-buffer
+                                        *window* status-window]
+                                (status/update-status-preview!))
+                              (regit-preview/wait-for-preview-buffer status-buffer target 50)))]
+    :until preview
+    :return preview
+    :timeout-ms timeout-ms
+    :interval-ms 50))
+
+(defn- get-section-range [lines section-name]
+  (let [start (find-line-index lines #(str/includes? % section-name))]
+    (when start
+      (let [end (or (find-line-index-after lines (inc start) #(or (str/includes? % "Unstaged changes")
+                                                                (str/includes? % "Staged changes")
+                                                                (str/includes? % "Recent commits")))
+                  (count lines))]
+        [start end]))))
+
+(deftest regit-status-tree-walks-large-sections-iteratively-test
+  (let [file-count 1000
+        children (mapv (fn [i] {:id [:file :staged (str "file-" i)]}) (range file-count))
+        cached-child {:id [:hunk :staged "cached" 1]}
+        tree [{:id [:section :staged]
+               :children children}
+              {:id :cached-parent
+               :children-cache (atom [cached-child])}]
+        last-id [:file :staged (str "file-" (dec file-count))]
+        ids (status/collect-node-ids tree)]
+    (is= last-id (:id (find-cached-node tree last-id)))
+    (test/assert (contains? ids last-id) "expected large section child id to be collected")
+    (test/assert (contains? ids (:id cached-child)) "expected cached child id to be collected")))
+
+(deftest regit-status-jump-to-file-test
+  (let [tmp-dir (temp-file-path "regit-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "hello")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                test-line-idx (find-line-index lines #(str/includes? (str %) "test.txt"))]
+            (test/assert test-line-idx "Could not find test.txt in status buffer")
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock test-line-idx))
+              false status-window)
+            (status/regit-status-enter)
+            (let [new-buffer (window-buffer status-window)]
+              (is= (path-canonicalize file-path) (path-canonicalize (:file new-buffer))))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-jump-to-hunk-line-test
+  (let [tmp-dir (temp-file-path "regit-hunk-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "line1\nline2\nline3\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file file-path "line1\nline2 modified\nline3\n")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                header-line-idx (find-line-index lines #(str/includes? (str %) "modified test.txt"))]
+            (test/assert header-line-idx "Could not find file header in status buffer")
+            (set-focused-window status-window)
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock header-line-idx)) false status-window)
+            (outline/toggle-fold)
+            (let [lines (buffer-content-lines)
+                  modified-line-idx (find-line-index lines #(str/includes? (str %) "+line2 modified"))]
+              (test/assert modified-line-idx "Could not find modified line in status buffer")
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                             (buffer/line-to-char lock modified-line-idx))
+                false status-window)
+              (status/regit-status-enter)
+              (let [new-buffer (window-buffer status-window)
+                    new-cursor (current-line new-buffer)]
+                (is= (path-canonicalize file-path) (path-canonicalize (:file new-buffer)))
+                (is= 1 new-cursor)))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-jump-to-file-from-staged-hunk-test
+  (let [tmp-dir (temp-file-path "regit-hunk-test-repo-staged")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "line1\nline2\nline3\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file file-path "line1\nline2 modified\nline3\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                header-line-idx (find-line-index lines #(str/includes? (str %) "modified test.txt"))]
+            (test/assert header-line-idx "Could not find file header in status buffer")
+            (set-focused-window status-window)
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock header-line-idx)) false status-window)
+            (outline/toggle-fold)
+            (let [lines (buffer-content-lines)
+                  deleted-line-idx (find-line-index lines #(str/includes? (str %) "-line2"))]
+              (test/assert deleted-line-idx "Could not find deleted line in staged section of status buffer")
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                             (buffer/line-to-char lock deleted-line-idx))
+                false status-window)
+              (status/regit-status-jump-to-file)
+              (let [new-buffer (window-buffer status-window)
+                    new-cursor (current-line new-buffer)]
+                (is= (path-canonicalize file-path) (path-canonicalize (:file new-buffer)))
+                (is= 1 new-cursor)))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-enter-on-change-section-opens-view-diff-test
+  (let [tmp-dir (temp-file-path "regit-status-enter-section-diff-test")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        index-path (path-join tmp-dir "index.txt")
+        worktree-path (path-join tmp-dir "worktree.txt")
+        _ (write-file index-path "keep\nremove\n")
+        _ (write-file worktree-path "keep\nremove\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "index.txt" "worktree.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file index-path "keep\nstaged\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "index.txt"])
+        _ (write-file worktree-path "keep\nunstaged\n")
+        status-buffer (create-buffer)]
+    (delete-other-windows)
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                unstaged-line (find-line-index lines #(str/includes? (str %) "Unstaged changes"))]
+            (test/assert unstaged-line "Could not find Unstaged changes section")
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock unstaged-line))
+              false status-window)
+            (status/regit-status-enter)
+            (let [view-window (focused-window)
+                  view-buffer (window-buffer view-window)]
+              (test/assert (not= status-window view-window) "regit-view-diff did not open in another window")
+              (binding [*window* view-window
+                        *buffer* view-buffer]
+                (is= :regit-view-diff *mode*)
+                (let [text (with-read-lock [lock (buffer-text)]
+                             (buffer/slice lock 0 (buffer/len-chars lock)))]
+                  (test/assert (str/includes? text "Working tree diff")
+                    (str "Unstaged section did not open working tree diff. Got: " text))
+                  (test/assert (str/includes? text "worktree.txt | 2 +-")
+                    (str "Unstaged diff missing summary for worktree.txt. Got: " text))
+                  (test/assert (not (str/includes? text "index.txt | 2 +-"))
+                    (str "Unstaged diff unexpectedly included staged summary. Got: " text)))))))
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (set-focused-window status-window)
+          (let [lines (buffer-content-lines)
+                staged-line (find-line-index lines #(str/includes? (str %) "Staged changes"))]
+            (test/assert staged-line "Could not find Staged changes section")
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock staged-line))
+              false status-window)
+            (status/regit-status-enter)
+            (let [view-window (focused-window)
+                  view-buffer (window-buffer view-window)]
+              (test/assert (not= status-window view-window) "regit-view-diff did not open in another window")
+              (binding [*window* view-window
+                        *buffer* view-buffer]
+                (is= :regit-view-diff *mode*)
+                (let [text (with-read-lock [lock (buffer-text)]
+                             (buffer/slice lock 0 (buffer/len-chars lock)))]
+                  (test/assert (str/includes? text "Pending commit")
+                    (str "Staged section did not open pending commit diff. Got: " text))
+                  (test/assert (str/includes? text "index.txt | 2 +-")
+                    (str "Staged diff missing summary for index.txt. Got: " text))
+                  (test/assert (not (str/includes? text "worktree.txt | 2 +-"))
+                    (str "Staged diff unexpectedly included unstaged summary. Got: " text)))))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-stash-test
+  (let [tmp-dir (temp-file-path "regit-stash-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "hello\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file file-path "hello modified\n")
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"])
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                stash-line-idx (find-line-index lines #(str/includes? (str %) "test stash"))]
+            (test/assert stash-line-idx "Could not find test stash in status buffer")
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock stash-line-idx))
+              false status-window)
+            (status/regit-status-enter)
+            (let [new-buffer (window-buffer status-window)]
+              (binding [*buffer* new-buffer]
+                (is= :regit-view-stash *mode*)
+                (let [text (with-read-lock [lock (buffer-text)]
+                             (buffer/slice lock 0 (buffer/len-chars lock)))]
+                  (test/assert (str/includes? text "Staged changes")
+                    (str "regit-view-stash buffer missing Staged changes header. Got: " text))
+                  (test/assert (str/includes? text "Unstaged changes")
+                    (str "regit-view-stash buffer missing Unstaged changes header. Got: " text))
+                  (let [view-lines (str/split-lines text)
+                        file-idx (find-line-index view-lines #(str/includes? (str %) "test.txt"))]
+                    (test/assert file-idx "Could not find test.txt in stash view")
+                    (let [expanded-text (with-read-lock [lock (buffer-text)] (buffer/slice lock 0 (buffer/len-chars lock)))]
+                      (test/assert (str/includes? expanded-text "+hello modified")
+                        (str "regit-view-stash buffer missing expected diff content. Got: " expanded-text)))))))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-previews-commit-and-promotes-stash-test
+  (let [tmp-dir (temp-file-path "regit-status-preview-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "one\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "first preview commit"])
+        _ (write-file file-path "two\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "second preview commit"])
+        _ (write-file file-path "stash change\n")
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "preview stash"])
+        status-buffer (create-buffer)]
+    (delete-other-windows)
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                recent-header (find-line-index lines #(str/includes? (str %) "Recent commits"))
+                recent-line (find-line-index-after lines (or recent-header 0) #(str/includes? (str %) "second preview commit"))
+                stash-line (find-line-index lines #(str/includes? (str %) "preview stash"))]
+            (test/assert recent-header "Could not find recent commits section")
+            (test/assert recent-line "Could not find recent commit line")
+            (test/assert stash-line "Could not find stash line")
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock recent-line))
+              false status-window)
+            (let [commit-target (status/preview-target-at-line recent-line)
+                  commit-preview (wait-for-status-preview-buffer status-buffer status-window commit-target 4000)]
+              (test/assert commit-preview "Commit preview buffer was not displayed")
+              (is= status-window (focused-window))
+              (let [commit-preview-window (first (filter #(= (:id (window-buffer %)) (:id commit-preview))
+                                                   (frame-normal-windows)))]
+                (test/assert commit-preview-window "Commit preview window not found")
+                (test/assert (not= status-window commit-preview-window) "Commit preview focused the status window")
+                (binding [*window* commit-preview-window
+                          *buffer* commit-preview]
+                  (is= :regit-view-commit *mode*)
+                  (let [text (with-read-lock [lock (buffer-text commit-preview)]
+                               (buffer/slice lock 0 (buffer/len-chars lock)))]
+                    (test/assert (str/includes? text "second preview commit")
+                      (str "Commit preview missing commit summary. Got: " text))))
+                (let [previous-hook regit-preview/*before-create-preview-buffer-hook*]
+                  (set! regit-preview/*before-create-preview-buffer-hook*
+                    (fn [] (sleep (ms->duration 150))))
+                  (try
+                    (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                                   (buffer/line-to-char lock stash-line))
+                      false status-window)
+                    (test/assert (some #(= (:id %) (:id commit-preview)) (list-buffers))
+                      "Commit preview buffer was closed before the replacement preview was ready")
+                    (is= commit-preview (window-buffer commit-preview-window))
+                    (finally
+                      (set! regit-preview/*before-create-preview-buffer-hook* previous-hook))))
+                (let [stash-target (status/preview-target-at-line stash-line)
+                      stash-preview (wait-for-status-preview-buffer status-buffer status-window stash-target 4000)]
+                  (test/assert stash-preview "Stash preview buffer was not displayed")
+                  (test/assert (regit-preview/wait-for-buffer-closed commit-preview 500)
+                    "Commit preview buffer was not closed after the stash preview displayed")
+                  (is= stash-preview (window-buffer commit-preview-window))
+                  (move-cursor 0 false status-window)
+                  (test/assert (regit-preview/wait-for-buffer-closed stash-preview 500)
+                    "Stash preview buffer was not closed after cursor moved away")
+                  (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                                 (buffer/line-to-char lock stash-line))
+                    false status-window)
+                  (let [preview-buffer (wait-for-status-preview-buffer status-buffer status-window stash-target 4000)]
+                    (test/assert preview-buffer "Stash preview buffer was not displayed again")
+                    (let [preview-window (first (filter #(= (:id (window-buffer %)) (:id preview-buffer))
+                                                  (frame-normal-windows)))]
+                      (test/assert preview-window "Stash preview window not found")
+                      (status/regit-status-enter)
+                      (is= preview-window (focused-window))
+                      (is= preview-buffer (window-buffer preview-window))
+                      (test/assert (not (regit-preview/active-preview status-buffer))
+                        "Source status buffer still had active preview state after promotion")
+                      (binding [*window* preview-window
+                                *buffer* preview-buffer]
+                        (is= :regit-view-stash *mode*)
+                        (is= false outline/*show-arrows*)
+                        (is= 0 outline/*indent-width*)
+                        (test/assert (str/includes? (:name preview-buffer) "*regit-stash: stash@{0}*")
+                          (str "Promoted stash preview kept preview name: " (:name preview-buffer))))
+                      (set-focused-window status-window)
+                      (move-cursor 0 false status-window)
+                      (test/assert (some #(= (:id %) (:id preview-buffer)) (list-buffers))
+                        "Promoted stash preview buffer was killed after moving the status cursor")))))))))
+      (sh! "rm" ["-rf" tmp-dir]))))
+
+(deftest regit-status-preview-disabled-test
+  (let [tmp-dir (temp-file-path "regit-status-preview-disabled-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "preview disabled\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "disabled status preview commit"])
+        status-buffer (create-buffer)
+        previous-preview-on-focus regit-preview/regit-preview-on-focus]
+    (delete-other-windows)
+    (set! regit-preview/regit-preview-on-focus false)
+    (try
+      (binding [*buffer* status-buffer]
+        (status/regit-status tmp-dir)
+        (let [status-window (focused-window)
+              status-buffer (window-buffer status-window)]
+          (binding [*window* status-window
+                    *buffer* status-buffer]
+            (let [lines (buffer-content-lines)
+                  recent-header (find-line-index lines #(str/includes? (str %) "Recent commits"))
+                  recent-line (find-line-index-after lines (or recent-header 0) #(str/includes? (str %) "disabled status preview commit"))]
+              (test/assert recent-header "Could not find recent commits section")
+              (test/assert recent-line "Could not find disabled status preview commit line")
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                             (buffer/line-to-char lock recent-line))
+                false status-window)
+              (sleep (ms->duration 100))
+              (test/assert (not (regit-preview/active-preview status-buffer))
+                "Status preview state was created while regit-preview-on-focus was false")
+              (test/assert (not (some #(:regit-preview? @(buffer-state %)) (list-buffers)))
+                "Status preview buffer was created while regit-preview-on-focus was false")))))
+      (finally
+        (set! regit-preview/regit-preview-on-focus previous-preview-on-focus)
+        (sh! "rm" ["-rf" tmp-dir])))))
+
+(deftest regit-status-apply-stash-test
+  (let [tmp-dir (temp-file-path "regit-status-apply-stash-test")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "hello\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file file-path "hello modified\n")
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"])
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                stash-line-idx (find-line-index lines #(str/includes? (str %) "test stash"))]
+            (test/assert stash-line-idx "Could not find test stash in status buffer")
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock stash-line-idx))
+              false status-window)
+            (status/regit-status-apply)
+            (let [text (with-read-lock [lock (buffer-text status-buffer)]
+                         (buffer/slice lock 0 (buffer/len-chars lock)))]
+              (test/assert (str/includes? text "test.txt")
+                (str "Status buffer missing test.txt after stash apply. Got: " text))
+              (test/assert (str/includes? text "Unstaged changes")
+                (str "Status buffer missing Unstaged changes header after stash apply. Got: " text)))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-apply-stash-refreshes-after-failure-test
+  (let [tmp-dir (temp-file-path "regit-status-apply-stash-refreshes-after-failure-test")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "hello\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file file-path "hello modified\n")
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "test stale stash"])
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                stash-line-idx (find-line-index lines #(str/includes? (str %) "test stale stash"))]
+            (test/assert stash-line-idx "Could not find stale stash in status buffer")
+            (sh! "git" ["-C" tmp-dir "stash" "drop" "stash@{0}"])
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock stash-line-idx))
+              false status-window)
+            (status/regit-status-apply)
+            (let [text (with-read-lock [lock (buffer-text status-buffer)]
+                         (buffer/slice lock 0 (buffer/len-chars lock)))]
+              (test/assert (not (str/includes? text "test stale stash"))
+                (str "Status buffer was not refreshed after failed stash apply. Got: " text)))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-discard-stash-requires-confirmation-test
+  (let [tmp-dir (temp-file-path "regit-status-discard-stash-test")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "hello\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file file-path "hello modified\n")
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "drop me"])
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                stash-line-idx (find-line-index lines #(str/includes? (str %) "drop me"))]
+            (test/assert stash-line-idx "Could not find stash in status buffer")
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock stash-line-idx))
+              false status-window)
+            (status/regit-discard)
+            (let [mb-win (minibuffer-window)]
+              (test/assert mb-win "minibuffer-window not opened for stash discard confirmation")
+              (let [mb-buf (window-buffer mb-win)]
+                (binding [*buffer* mb-buf
+                          *window* mb-win]
+                  (let [prompt (:prompt @simple-prompt/*state*)]
+                    (test/assert (str/includes? (str prompt) "drop me")
+                      (str "stash discard prompt did not include stash name. Got: " prompt))
+                    (test/assert (str/includes? (str prompt) "Type [y] to confirm")
+                      (str "stash discard prompt did not include single-key confirmation. Got: " prompt)))
+                  (simple-prompt/simple-prompt-append-char "n"))))
+            (is= 1 (count (git-stashes tmp-dir)))
+            (status/regit-discard)
+            (let [mb-win (minibuffer-window)]
+              (test/assert mb-win "minibuffer-window not opened for stash discard confirmation")
+              (let [mb-buf (window-buffer mb-win)]
+                (binding [*buffer* mb-buf
+                          *window* mb-win]
+                  (simple-prompt/simple-prompt-append-char "y"))))
+            (is= 0 (count (git-stashes tmp-dir)))
+            (let [text (with-read-lock [lock (buffer-text status-buffer)]
+                         (buffer/slice lock 0 (buffer/len-chars lock)))]
+              (test/assert (not (str/includes? text "drop me"))
+                (str "Status buffer still included dropped stash. Got: " text)))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-draw-all-for-library-buffer-test
+  (let [tmp-dir (temp-file-path "regit-test-repo-draw")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "hello")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)
+            initial-buffer-count (count (list-buffers))]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (is= true (:read-only @(buffer-state status-buffer)))
+          (is= :regit-status *mode*)
+          (status/regit-status tmp-dir)
+          (let [second-status-buffer (window-buffer (focused-window))]
+            (is= (:id status-buffer) (:id second-status-buffer))
+            (is= initial-buffer-count (count (list-buffers)))
+            (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))]
+              (test/assert (str/includes? content "Repository:") "expected regit repository heading")
+              (test/assert (not (str/includes? content "Branch:")) "did not expect old branch heading")
+              (test/assert (str/includes? content "Head:") "expected regit head summary")
+              (test/assert (str/includes? content tmp-dir) "expected regit repository root"))
+            (let [label (:label @(buffer-state status-buffer))]
+              (test/assert (property-string? label) "regit-status label should preserve styled spans")
+              (test/assert (str/includes? label "regit-status: ") "regit-status label missing prefix")
+              (test/assert (str/includes? label (path-filename tmp-dir)) "regit-status label missing repo name"))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-show-commands-layout-test
+  (let [tmp-dir (temp-file-path "regit-status-show-commands")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (status/regit-status-show-commands)
+      (let [ui-win (minibuffer-ui-window)]
+        (test/assert ui-win "minibuffer-ui-window not opened")
+        (let [ui-buf (window-buffer ui-win)
+              text (with-read-lock [lock (buffer-text ui-buf)]
+                     (buffer/slice lock 0 (buffer/len-chars lock)))]
+          (doseq [expected ["Transient and dwim commands"
+                            "Applying changes"
+                            "Essential commands"
+                            "Branch"
+                            "Commit"
+                            "Fetch"
+                            "Pull"
+                            "Log"
+                            "Push"
+                            "Stash"
+                            "Worktree"
+                            "Help"
+                            "Apply"
+                            "Stage"
+                            "Unstage"
+                            "Discard"
+                            "Close buffer"
+                            "Toggle section at point"
+                            "Visit thing at point"
+                            "Visit file at point"]]
+            (test/assert (str/includes? text expected)
+              (str "regit status help missing " expected ": " text)))
+          (let [lines (vec (str/split text #"\n"))
+                essential-idx (find-line-index lines #(str/includes? % "Essential commands"))]
+            (test/assert essential-idx "missing Essential commands heading")
+            (let [first-row (get lines (inc essential-idx))
+                  second-row (get lines (+ essential-idx 2))]
+              (test/assert (and (str/includes? first-row "Close buffer")
+                             (str/includes? first-row "Toggle section at point")
+                             (not (str/includes? first-row "Visit thing at point")))
+                (str "expected Essential commands first row to use two columns: " first-row))
+              (test/assert (and (str/includes? second-row "Visit thing at point")
+                             (str/includes? second-row "Visit file at point"))
+                (str "expected Essential commands second row to use two columns: " second-row))
+              (is= (str/index-of first-row "<tab>") (str/index-of second-row "C-<enter>"))))
+          (binding [*buffer* ui-buf
+                    *window* ui-win
+                    *mode* :regit-command
+                    *submodes* #{}]
+            (doseq [key ["b" "c" "f" "F" "l" "P" "z" "Z" "?" "a" "s" "u" "x" "q" "<enter>" "C-<enter>"]]
+              (test/assert (ifn? (regit-command/regit-command-keymap (keys/parse-key-sequence key)))
+                (str "missing regit status help command key: " key)))
+            (let [close-cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "q"))]
+              (when (ifn? close-cmd)
+                (close-cmd)))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-branch-summary-test
+  (let [tmp-dir (temp-file-path "regit-branch-summary-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        _ (sh! "git" ["-C" tmp-dir "remote" "add" "origin" "https://example.invalid/relay.git"])
+        tracked (path-join tmp-dir "tracked.txt")
+        subject "test runner output formatting and colors"
+        _ (write-file tracked "hello\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" subject])
+        _ (sh! "git" ["-C" tmp-dir "branch" "-M" "main"])
+        _ (sh! "git" ["-C" tmp-dir "update-ref" "refs/remotes/origin/main" "HEAD"])
+        _ (sh! "git" ["-C" tmp-dir "branch" "--set-upstream-to" "origin/main" "main"])
+        _ (sh! "git" ["-C" tmp-dir "config" "pull.rebase" "true"])
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))
+                repository-idx (str/index-of content "Repository:")
+                head-idx (str/index-of content (str "Head:        main " subject))]
+            (test/assert head-idx "expected regit head summary")
+            (test/assert (str/includes? content (str "Rebase:      origin/main " subject)) "expected regit rebase summary")
+            (test/assert (str/includes? content (str "Push:        origin/main " subject)) "expected regit push summary")
+            (test/assert (not (str/includes? content "Branch:")) "did not expect old branch heading")
+            (test/assert (and repository-idx head-idx (< repository-idx head-idx))
+              "expected branch summary inside repository heading")))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-branch-summary-uses-merge-label-when-pull-rebase-is-not-true-test
+  (let [tmp-dir (temp-file-path "regit-branch-summary-merge-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        _ (sh! "git" ["-C" tmp-dir "remote" "add" "origin" "https://example.invalid/relay.git"])
+        tracked (path-join tmp-dir "tracked.txt")
+        subject "test runner output formatting and colors"
+        _ (write-file tracked "hello\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" subject])
+        _ (sh! "git" ["-C" tmp-dir "branch" "-M" "main"])
+        _ (sh! "git" ["-C" tmp-dir "update-ref" "refs/remotes/origin/main" "HEAD"])
+        _ (sh! "git" ["-C" tmp-dir "branch" "--set-upstream-to" "origin/main" "main"])
+        _ (sh! "git" ["-C" tmp-dir "config" "pull.rebase" "false"])
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))]
+            (test/assert (str/includes? content (str "Merge:       origin/main " subject)) "expected regit merge summary")
+            (test/assert (not (str/includes? content "Rebase:")) "did not expect regit rebase summary")))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-enter-on-branch-summary-opens-log-target-test
+  (let [tmp-dir (temp-file-path "regit-branch-summary-enter-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        _ (sh! "git" ["-C" tmp-dir "remote" "add" "origin" "https://example.invalid/relay.git"])
+        tracked (path-join tmp-dir "tracked.txt")
+        _ (write-file tracked "main\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "main commit"])
+        _ (sh! "git" ["-C" tmp-dir "branch" "-M" "main"])
+        _ (sh! "git" ["-C" tmp-dir "checkout" "-b" "remote-seed"])
+        _ (write-file tracked "remote\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "remote commit"])
+        _ (sh! "git" ["-C" tmp-dir "update-ref" "refs/remotes/origin/main" "HEAD"])
+        _ (sh! "git" ["-C" tmp-dir "checkout" "main"])
+        _ (sh! "git" ["-C" tmp-dir "branch" "--set-upstream-to" "origin/main" "main"])
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                push-line-idx (find-line-index lines #(str/includes? (str %) "Push:"))
+                item (get (:line-to-item @(buffer-state status-buffer)) push-line-idx)]
+            (test/assert push-line-idx "Could not find Push line in status buffer")
+            (is= "origin/main" (:log-ref item))
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock push-line-idx))
+              false status-window)
+            (status/regit-status-enter)
+            (let [log-buffer (window-buffer status-window)]
+              (binding [*window* status-window
+                        *buffer* log-buffer]
+                (is= :regit-log *mode*)
+                (let [text (with-read-lock [lock (buffer-text log-buffer)]
+                             (buffer/slice lock 0 (buffer/len-chars lock)))]
+                  (test/assert (str/includes? text "Commits in origin/main") "regit-log missing target header")
+                  (test/assert (str/includes? text "remote commit") "regit-log missing target commit"))))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-initially-hides-file-diffs-test
+  (let [tmp-dir (temp-file-path "regit-hides-diffs-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        binary (path-join tmp-dir "image.png")
+        _ (write-file tracked "before\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
+        _ (write-file tracked "after\n")
+        _ (write-file binary "fake png data")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))]
+            (test/assert (str/includes? content "Untracked files (1)") "expected untracked section")
+            (test/assert (str/includes? content "Unstaged changes (1)") "expected unstaged section")
+            (test/assert (str/includes? content "modified tracked.txt") "expected tracked file header")
+            (test/assert (str/includes? content "image.png") "expected untracked file path")
+            (test/assert (not (str/includes? content "untracked image.png")) "expected untracked files to render without a status prefix")
+            (test/assert (not (str/includes? content "+after")) "diff content should not be rendered initially")))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-stage-and-unstage-file-entry-test
+  (let [tmp-dir (temp-file-path "regit-stage-unstage-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        _ (write-file tracked "before\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
+        _ (write-file tracked "after\n")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                file-line (find-line-index lines (fn [l] (str/includes? (str l) "modified tracked.txt")))]
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock file-line)) false status-window)
+            (status/regit-stage)
+            (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "tracked.txt")
+                  unstaged-diff (get-git-output tmp-dir "diff" "--" "tracked.txt")]
+              (test/assert (str/includes? (str staged-diff) "+after") "expected staged diff to contain +after")
+              (test/assert (str/blank? unstaged-diff) "expected unstaged diff to be empty"))
+            (let [lines (buffer-content-lines)
+                  staged-section (find-line-index lines (fn [l] (str/includes? (str l) "Staged changes (1)")))
+                  staged-file-line (find-line-index-after lines (if staged-section (inc staged-section) 0) (fn [l] (str/includes? (str l) "modified tracked.txt")))]
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock staged-file-line)) false status-window)
+              (status/regit-unstage)
+              (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "tracked.txt")
+                    unstaged-diff (get-git-output tmp-dir "diff" "--" "tracked.txt")]
+                (test/assert (str/blank? staged-diff) "expected staged diff to be empty")
+                (test/assert (str/includes? (str unstaged-diff) "+after") "expected unstaged diff to contain +after")))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-unstage-unresolved-conflict-from-staged-section-test
+  (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-unstage")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                staged-section (find-line-index lines #(str/includes? (str %) "Staged changes"))]
+            (test/assert staged-section (str "Missing staged section in " lines))
+            (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt" staged-section)
+            (status/regit-unstage)
+            (test/assert (str/blank? (unmerged-index tmp-dir)) "unstage should clear unmerged index entries")
+            (let [porcelain (get-git-output-raw tmp-dir "status" "--porcelain")]
+              (test/assert (str/includes? porcelain " M conflict.txt")
+                (str "unstage should leave conflict markers as an unstaged worktree change. Got: " porcelain)))
+            (let [content (with-read-lock [lock (buffer-text status-buffer)]
+                            (buffer/slice lock 0 (buffer/len-chars lock)))]
+              (test/assert (str/includes? content "Merging feature:") "status should still show merge in progress")
+              (test/assert (str/includes? content "modified conflict.txt")
+                (str "status should rerender conflict as unstaged modified file. Got: " content)))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-shows-special-merge-state-labels-test
+  (doseq [case-data [[:deleted-by-them "UD conflict.txt" "deleted by them conflict.txt"]
+                     [:deleted-by-us "DU conflict.txt" "deleted by us conflict.txt"]
+                     [:both-added "AA conflict.txt" "both added conflict.txt"]]]
+    (let [conflict-kind (nth case-data 0)
+          porcelain-fragment (nth case-data 1)
+          label (nth case-data 2)
+          tmp-dir (init-special-conflict-repo (str "regit-status-" (name conflict-kind)) conflict-kind)
+          status-buffer (create-buffer)]
+      (binding [*buffer* status-buffer]
+        (status/regit-status tmp-dir)
+        (let [status-window (focused-window)
+              status-buffer (window-buffer status-window)]
+          (binding [*window* status-window
+                    *buffer* status-buffer]
+            (let [porcelain (get-git-output-raw tmp-dir "status" "--porcelain")
+                  content (with-read-lock [lock (buffer-text status-buffer)]
+                            (buffer/slice lock 0 (buffer/len-chars lock)))]
+              (test/assert (str/includes? porcelain porcelain-fragment)
+                (str "expected raw porcelain state " porcelain-fragment ". Got: " porcelain))
+              (test/assert (str/includes? content label)
+                (str "expected status label " label ". Got: " content))))))
+      (sh! "rm" ["-rf" tmp-dir]))))
+
+(deftest regit-status-stage-and-unstage-resolved-conflict-file-test
+  (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-stage")
+        conflict-path (path-join tmp-dir "conflict.txt")
+        status-buffer (create-buffer)]
+    (write-file conflict-path "resolved\n")
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)]
+            (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt")
+            (status/regit-stage)
+            (test/assert (str/blank? (unmerged-index tmp-dir)) "stage should clear unmerged index entries")
+            (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "conflict.txt")]
+              (test/assert (str/includes? (str staged-diff) "+resolved")
+                (str "staged resolution should contain +resolved. Got: " staged-diff)))
+            (let [lines (buffer-content-lines)
+                  staged-section (find-line-index lines #(str/includes? (str %) "Staged changes"))]
+              (test/assert staged-section (str "Missing staged section after stage in " lines))
+              (move-to-line-containing! status-buffer status-window lines "modified conflict.txt" staged-section)
+              (status/regit-unstage)
+              (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "conflict.txt")
+                    unstaged-diff (get-git-output tmp-dir "diff" "--" "conflict.txt")]
+                (test/assert (str/blank? staged-diff) "unstage should clear staged resolution")
+                (test/assert (str/includes? (str unstaged-diff) "+resolved")
+                  "unstage should leave resolved content in worktree")))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-conflict-hunk-stage-shows-magit-error-test
+  (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-hunk-error")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [raw-diff (get-git-output tmp-dir "diff" "--cc" "--no-ext-diff" "--" "conflict.txt")]
+            (test/assert (str/includes? (str raw-diff) "@@@")
+              (str "raw conflict diff should include combined hunk. Got: " raw-diff)))
+          (let [lines (buffer-content-lines)
+                file-line (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt")]
+            (let [item (get (:line-to-item @(buffer-state status-buffer)) file-line)
+                  children (:children item)
+                  deferred (:deferred-children item)
+                  entry (:entry item)]
+              (test/assert (or (seq children) deferred)
+                "conflict file item should have deferred diff children")
+              (test/assert (str/includes? (str (:diff entry)) "@@@")
+                (str "conflict file entry should carry combined diff. Got: " (:diff entry)))
+              (let [generated (regit-diff/make-file-entry-items entry {:path-section :unstaged
+                                                                       :hunk-id-section :unstaged
+                                                                       :include-patch? true
+                                                                       :include-entry? true})]
+                (test/assert (seq generated)
+                  (str "combined conflict diff should generate hunk items. Diff: " (:diff entry)))))
+            (outline/toggle-fold)
+            (let [expanded-lines (buffer-content-lines)
+                  hunk-line (find-line-index-after expanded-lines (inc file-line) #(str/includes? (str %) "@@@"))]
+              (test/assert hunk-line (str "Could not find combined conflict hunk in " expanded-lines))
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                             (buffer/line-to-char lock hunk-line))
+                false status-window)
+              (status/regit-stage)
+              (let [messages (with-read-lock [lock (buffer-text (buffer/get-buffer "*Messages*"))]
+                               (buffer/slice lock 0 (buffer/len-chars lock)))]
+                (test/assert (str/includes? messages "Cannot un-/stage resolution hunks. Stage the whole file")
+                  (str "expected Magit conflict hunk error. Messages: " messages)))
+              (let [content (with-read-lock [lock (buffer-text status-buffer)]
+                              (buffer/slice lock 0 (buffer/len-chars lock)))]
+                (test/assert (str/includes? content "Merging feature:")
+                  "status should rerender after failed conflict hunk operation")))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-conflict-hunk-unstage-shows-magit-error-test
+  (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-hunk-unstage-error")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                staged-section (find-line-index lines #(str/includes? (str %) "Staged changes"))]
+            (test/assert staged-section (str "Missing staged section in " lines))
+            (let [file-line (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt" staged-section)]
+              (outline/toggle-fold)
+              (let [expanded-lines (buffer-content-lines)
+                    hunk-line (find-line-index-after expanded-lines (inc file-line) #(str/includes? (str %) "@@@"))]
+                (test/assert hunk-line (str "Could not find staged combined conflict hunk in " expanded-lines))
+                (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                               (buffer/line-to-char lock hunk-line))
+                  false status-window)
+                (status/regit-unstage)
+                (let [messages (with-read-lock [lock (buffer-text (buffer/get-buffer "*Messages*"))]
+                                 (buffer/slice lock 0 (buffer/len-chars lock)))]
+                  (test/assert (str/includes? messages "Cannot un-/stage resolution hunks. Stage the whole file")
+                    (str "expected Magit conflict hunk unstage error. Messages: " messages)))))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-discard-conflict-file-prompts-for-stage-test
+  (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-discard")
+        conflict-path (path-join tmp-dir "conflict.txt")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)]
+            (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt")
+            (status/regit-discard)
+            (let [ui-win (minibuffer-ui-window)]
+              (test/assert ui-win "iselect UI should open for conflict discard")
+              (let [ui-text (with-read-lock [lock (buffer-text (window-buffer ui-win))]
+                              (buffer/slice lock 0 (buffer/len-chars lock)))]
+                (test/assert (str/includes? ui-text "our stage")
+                  (str "conflict discard choices should include our stage. Got: " ui-text))
+                (test/assert (str/includes? ui-text "their stage")
+                  (str "conflict discard choices should include their stage. Got: " ui-text))
+                (test/assert (str/includes? ui-text "conflict")
+                  (str "conflict discard choices should include conflict restore. Got: " ui-text))))
+            (let [mb-win (minibuffer-window)]
+              (test/assert mb-win "iselect minibuffer should be open")
+              (binding [*buffer* (window-buffer mb-win)
+                        *window* mb-win
+                        *mode* :iselect
+                        *submodes* #{}]
+                (iselect/select-current-entry)))
+            (is= "ours\n" (read-file conflict-path))
+            (test/assert (str/blank? (unmerged-index tmp-dir)) "choosing our stage should resolve unmerged index")
+            (let [content (with-read-lock [lock (buffer-text status-buffer)]
+                            (buffer/slice lock 0 (buffer/len-chars lock)))]
+              (test/assert (str/includes? content "Merging feature:") "merge should remain in progress after checkout-stage")
+              (test/assert (not (str/includes? content "both modified conflict.txt"))
+                (str "resolved conflict should be removed from conflict sections. Got: " content)))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-discard-conflict-choice-updates-preview-test
+  (let [tmp-dir (init-conflicted-merge-repo-with-content
+                  "regit-status-conflict-discard-preview"
+                  "shared before\nbase one\nshared middle\nbase two\nshared after\n"
+                  "shared before\nours one\nshared middle\nours two\nshared after\n"
+                  "shared before\ntheirs one\nshared middle\ntheirs two\nshared after\n")
+        conflict-path (path-join tmp-dir "conflict.txt")
+        status-buffer (create-buffer)]
+    (delete-other-windows)
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)]
+            (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt")
+            (status/regit-discard)
+            (let [ours-target [:conflict-stage-preview :ours ["conflict.txt"]]
+                  ours-preview (regit-preview/wait-for-preview-buffer status-buffer ours-target 4000)]
+              (test/assert ours-preview
+                (str "our stage preview buffer should be displayed. Active preview: "
+                  (regit-preview/active-preview status-buffer)
+                  " buffers: "
+                  (mapv :name (list-buffers))))
+              (test/assert (= true (:read-only @(buffer-state ours-preview))) "our stage preview should be read-only")
+              (test/assert (str/includes? (str (:label @(buffer-state ours-preview))) "our")
+                (str "our stage preview label should mention our. Got: " (:label @(buffer-state ours-preview))))
+              (let [preview-window (first (filter #(= (:id (window-buffer %)) (:id ours-preview))
+                                            (frame-normal-windows)))]
+                (test/assert preview-window "our stage preview window should be visible")
+                (test/assert (not= status-window preview-window) "our stage preview should use a secondary window"))
+              (let [preview-text (with-read-lock [lock (buffer-text ours-preview)]
+                                   (buffer/slice lock 0 (buffer/len-chars lock)))]
+                (test/assert (str/includes? preview-text "Selecting our stage")
+                  (str "preview should describe the focused our choice. Got: " preview-text))
+                (test/assert (str/includes? preview-text "ours one")
+                  (str "preview should include our unique content. Got: " preview-text))
+                (test/assert (str/includes? preview-text "ours two")
+                  (str "preview should include our second unique content. Got: " preview-text))
+                (test/assert (str/includes? preview-text "theirs one")
+                  (str "preview should include their unique content. Got: " preview-text))
+                (test/assert (str/includes? preview-text "theirs two")
+                  (str "preview should include their second unique content. Got: " preview-text))
+                (test/assert (not (str/includes? preview-text "shared before"))
+                  (str "preview should omit identical leading content. Got: " preview-text))
+                (test/assert (not (str/includes? preview-text "shared middle"))
+                  (str "preview should omit identical middle content. Got: " preview-text))
+                (test/assert (not (str/includes? preview-text "shared after"))
+                  (str "preview should omit identical trailing content. Got: " preview-text)))
+              (let [mb-win (minibuffer-window)]
+                (test/assert mb-win "iselect minibuffer should be open")
+                (binding [*buffer* (window-buffer mb-win)
+                          *window* mb-win
+                          *mode* :iselect
+                          *submodes* #{}]
+                  (iselect/iselect-next-entry)))
+              (let [their-target [:conflict-stage-preview :theirs ["conflict.txt"]]
+                    their-preview (regit-preview/wait-for-preview-buffer status-buffer their-target 4000)]
+                (test/assert their-preview "their stage preview buffer should be displayed")
+                (test/assert (regit-preview/wait-for-buffer-closed ours-preview 500)
+                  "our stage preview buffer should close after their stage preview displays")
+                (test/assert (= true (:read-only @(buffer-state their-preview))) "their stage preview should be read-only")
+                (test/assert (str/includes? (str (:label @(buffer-state their-preview))) "their")
+                  (str "their stage preview label should mention their. Got: " (:label @(buffer-state their-preview))))
+                (let [preview-text (with-read-lock [lock (buffer-text their-preview)]
+                                     (buffer/slice lock 0 (buffer/len-chars lock)))
+                      their-pos (str/index-of preview-text "their stage:")
+                      our-pos (str/index-of preview-text "our stage:")]
+                  (test/assert (str/includes? preview-text "Selecting their stage")
+                    (str "preview should describe the focused their choice. Got: " preview-text))
+                  (test/assert (and their-pos our-pos (< their-pos our-pos))
+                    (str "their stage should be shown first when focused. Got: " preview-text))
+                  (test/assert (not (str/includes? preview-text "shared before"))
+                    (str "their preview should omit identical leading content. Got: " preview-text))
+                  (test/assert (not (str/includes? preview-text "shared middle"))
+                    (str "their preview should omit identical middle content. Got: " preview-text))
+                  (test/assert (not (str/includes? preview-text "shared after"))
+                    (str "their preview should omit identical trailing content. Got: " preview-text)))
+                (let [mb-win (minibuffer-window)]
+                  (binding [*buffer* (window-buffer mb-win)
+                            *window* mb-win
+                            *mode* :iselect
+                            *submodes* #{}]
+                    (iselect/select-current-entry)))
+                (test/assert (regit-preview/wait-for-buffer-closed their-preview 1000)
+                  "their stage preview should close after the conflict choice is selected")
+                (is= "shared before\ntheirs one\nshared middle\ntheirs two\nshared after\n" (read-file conflict-path))
+                (test/assert (str/blank? (unmerged-index tmp-dir))
+                  "choosing their stage should resolve unmerged index")))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-discard-open-untracked-file-refreshes-status-test
+  (let [tmp-dir (temp-file-path "regit-discard-open-untracked-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        untracked (path-join tmp-dir "scratch.txt")
+        opened-buffer (atom nil)]
+    (try
+      (write-file tracked "tracked\n")
+      (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+      (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
+      (write-file untracked "scratch\n")
+      (let [file-buffer (open-file untracked)]
+        (reset! opened-buffer file-buffer)
+        (binding [*buffer* file-buffer]
+          (mode/enable-submode :diff-hl))
+        (status/regit-status tmp-dir)
+        (let [status-window (focused-window)
+              status-buffer (window-buffer status-window)]
+          (binding [*window* status-window
+                    *buffer* status-buffer]
+            (let [lines (buffer-content-lines)
+                  file-line (find-line-index lines #(str/includes? (str %) "scratch.txt"))]
+              (test/assert file-line "Could not find untracked file in status buffer")
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                             (buffer/line-to-char lock file-line))
+                false status-window)
+              (status/regit-discard)
+              (let [mb-win (minibuffer-window)]
+                (test/assert mb-win "minibuffer-window not opened for discard confirmation")
+                (let [mb-buf (window-buffer mb-win)]
+                  (binding [*buffer* mb-buf
+                            *window* mb-win]
+                    (simple-prompt/simple-prompt-append-char "y"))))
+              (let [text (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/slice lock 0 (buffer/len-chars lock)))]
+                (test/assert (not (str/includes? text "scratch.txt"))
+                  (str "Status buffer still included discarded untracked file. Got: " text)))))))
+      (finally
+        (when-let [buffer @opened-buffer]
+          (try
+            (kill-buffer buffer)
+            (catch exception e nil)))
+        (sh! "rm" ["-rf" tmp-dir])))))
+
+(deftest regit-status-stage-and-unstage-hunk-from-content-line-test
+  (let [tmp-dir (temp-file-path "regit-stage-hunk-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        initial (str/join "\n" (map #(str "line-" %) (range 1 17)))
+        updated (str/join "\n" (map #(cond (= % 2) (str "line-" % " staged") (= % 14) (str "line-" % " staged") :else (str "line-" %)) (range 1 17)))
+        _ (write-file tracked (str initial "\n"))
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
+        _ (write-file tracked (str updated "\n"))
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                file-line (find-line-index lines (fn [l] (str/includes? (str l) "modified tracked.txt")))]
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock file-line)) false status-window)
+            (outline/toggle-fold)
+            (let [lines (buffer-content-lines)
+                  hunk-line (find-line-index lines (fn [l] (str/includes? (str l) "+line-2 staged")))]
+              (test/assert hunk-line "Could not find hunk content line in buffer")
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock hunk-line)) false status-window)
+              (status/regit-stage)
+              (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "tracked.txt")]
+                (test/assert (str/includes? (str staged-diff) "+line-2 staged")
+                  "expected staged diff to contain first hunk")
+                (test/assert (not (str/includes? (str staged-diff) "+line-14 staged"))
+                  "expected staged diff to NOT contain second hunk"))
+              (let [lines (buffer-content-lines)
+                    staged-section (find-line-index lines (fn [l] (str/includes? (str l) "Staged changes (1)")))
+                    staged-file-line (find-line-index-after lines (if staged-section (inc staged-section) 0) (fn [l] (str/includes? (str l) "modified tracked.txt")))]
+                (test/assert staged-file-line "Could not find staged file line")
+                (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock staged-file-line)) false status-window)
+                (outline/toggle-fold)
+                (let [lines (buffer-content-lines)
+                      staged-hunk-line (find-line-index-after lines (inc staged-file-line) (fn [l] (str/includes? (str l) "+line-2 staged")))]
+                  (test/assert staged-hunk-line "Could not find staged hunk line in buffer")
+                  (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock staged-hunk-line)) false status-window)
+                  (status/regit-unstage)
+                  (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "tracked.txt")]
+                    (test/assert (str/blank? staged-diff) "expected staged diff to be empty"))))))))
+      (sh! "rm" ["-rf" tmp-dir]))))
+
+(deftest regit-status-section-stage-requires-confirmation-test
+  (let [tmp-dir (temp-file-path "regit-section-stage-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        _ (write-file tracked "before\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
+        _ (write-file tracked "after\n")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                section-line (find-line-index lines (fn [l] (str/includes? (str l) "Unstaged changes (1)")))]
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock section-line)) false status-window)
+            (status/regit-stage)
+            (let [mb-win (minibuffer-window)]
+              (test/assert mb-win "minibuffer-window not opened for confirmation prompt")
+              (let [mb-buf (window-buffer mb-win)]
+                (binding [*buffer* mb-buf
+                          *window* mb-win]
+                  (simple-prompt/simple-prompt-append-char "Y"))))
+            (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "tracked.txt")]
+              (test/assert (str/includes? (str staged-diff) "+after") "expected staged diff to contain +after"))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-discard-hunk-requires-confirmation-test
+  (let [tmp-dir (temp-file-path "regit-discard-hunk-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        _ (write-file tracked "before\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
+        _ (write-file tracked "after\n")
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                file-line (find-line-index lines (fn [l] (str/includes? (str l) "modified tracked.txt")))]
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock file-line)) false status-window)
+            (outline/toggle-fold)
+            (let [lines (buffer-content-lines)
+                  hunk-line (find-line-index lines (fn [l] (str/includes? (str l) "+after")))]
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock hunk-line)) false status-window)
+              (status/regit-discard)
+              (let [mb-win (minibuffer-window)]
+                (test/assert mb-win "minibuffer-window not opened for confirmation prompt")
+                (let [mb-buf (window-buffer mb-win)]
+                  (binding [*buffer* mb-buf
+                            *window* mb-win]
+                    (simple-prompt/simple-prompt-append-char "n"))))
+              (let [unstaged-diff (get-git-output tmp-dir "diff" "--" "tracked.txt")]
+                (test/assert (str/includes? (str unstaged-diff) "+after")
+                  "expected unstaged diff to still contain +after because discard was cancelled"))
+              (status/regit-discard)
+              (let [mb-win (minibuffer-window)]
+                (test/assert mb-win "minibuffer-window not opened for confirmation prompt")
+                (let [mb-buf (window-buffer mb-win)]
+                  (binding [*buffer* mb-buf
+                            *window* mb-win]
+                    (simple-prompt/simple-prompt-append-char "y"))))
+              (let [unstaged-diff (get-git-output tmp-dir "diff" "--" "tracked.txt")]
+                (test/assert (str/blank? unstaged-diff)
+                  "expected unstaged diff to be empty because hunk was discarded")))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-navigation-test
+  (let [tmp-dir (temp-file-path "regit-nav-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+
+        file1 (path-join tmp-dir "file1.txt")
+        file2 (path-join tmp-dir "file2.txt")
+        _ (write-file file1 "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n")
+        _ (write-file file2 "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "."])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+
+        _ (write-file file1 "1 modified\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11 modified\n12\n13\n14\n15\n")
+        _ (write-file file2 "a modified\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk modified\nl\nm\nn\no\n")
+
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                f1-idx (find-line-index lines #(str/includes? (str %) "modified file1.txt"))
+                f2-idx (find-line-index lines #(str/includes? (str %) "modified file2.txt"))]
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock f1-idx)) false status-window)
+            (outline/toggle-fold)
+
+            (let [lines (buffer-content-lines)
+                  f2-idx-new (find-line-index lines #(str/includes? (str %) "modified file2.txt"))]
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock f2-idx-new)) false status-window)
+              (outline/toggle-fold))
+
+            (let [lines (buffer-content-lines)
+                  h1-idx (find-line-index lines #(str/includes? (str %) "+1 modified"))]
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock h1-idx)) false status-window)
+              (status/regit-stage)
+
+              (let [current (current-line status-buffer)
+                    path (:id (get (:line-to-item @(buffer-state status-buffer)) current))]
+                (test/assert (and (vector? path)
+                               (= (first path) :hunk)
+                               (= (nth path 1) :unstaged)
+                               (= (nth path 2) "file1.txt"))
+                  (str "Expected cursor on file1.txt hunk, got: " (nth (buffer-content-lines) current) " Path: " path)))
+
+              (status/regit-stage)
+
+              (let [current (current-line status-buffer)
+                    path (:id (get (:line-to-item @(buffer-state status-buffer)) current))]
+                (test/assert (and (vector? path)
+                               (= (first path) :hunk)
+                               (= (nth path 1) :unstaged)
+                               (= (nth path 2) "file2.txt"))
+                  (str "Expected cursor on file2.txt hunk, got: " (nth (buffer-content-lines) current) " Path: " path)))
+
+              (let [lines (buffer-content-lines)
+                    f2-idx-header (find-line-index lines #(str/includes? (str %) "modified file2.txt"))]
+                (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock f2-idx-header)) false status-window)
+                (status/regit-stage)
+                (let [current (current-line status-buffer)
+                      item (get (:line-to-item @(buffer-state status-buffer)) current)]
+                  (test/assert item "Cursor lost item after staging last file"))))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-maintain-state-test
+  (let [tmp-dir (temp-file-path "regit-state-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+
+        file1 (path-join tmp-dir "file1.txt")
+        file2 (path-join tmp-dir "file2.txt")
+        _ (write-file file1 "line1\nline2\nline3\n")
+        _ (write-file file2 "a\nb\nc\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "."])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+
+        _ (write-file file1 "line1 modified\nline2\nline3 modified\n")
+        _ (write-file file2 "a modified\nb\nc modified\n")
+
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                file1-line (find-line-index lines #(str/includes? (str %) "modified file1.txt"))]
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock file1-line)) false status-window)
+            (outline/toggle-fold)
+            (let [lines-after-expand (buffer-content-lines)
+                  hunk1-content-line (find-line-index lines-after-expand #(str/includes? (str %) "+line1 modified"))]
+
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock hunk1-content-line)) false status-window)
+              (let [original-cursor (current-line status-buffer)]
+
+                (status/regit-stage)
+                (status/regit-status tmp-dir)
+                (is= status-buffer (window-buffer status-window))
+
+                (let [lines (buffer-content-lines)
+                      file2-line (find-line-index lines #(str/includes? (str %) "modified file2.txt"))]
+                  (test/assert file2-line "file2.txt not found in unstaged")
+                  (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock file2-line)) false status-window)
+                  (outline/toggle-fold)
+                  (let [lines (buffer-content-lines)
+                        hunk-content-file2 (find-line-index lines #(str/includes? (str %) "+a modified"))]
+                    (test/assert hunk-content-file2 "file2 hunk content not found after expand")
+                    (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock hunk-content-file2)) false status-window)
+
+                    (status/regit-discard)
+                    (let [mb-win (minibuffer-window)]
+                      (test/assert mb-win "minibuffer-window not opened for discard confirmation")
+                      (let [mb-buf (window-buffer mb-win)]
+                        (binding [*buffer* mb-buf
+                                  *window* mb-win]
+                          (simple-prompt/simple-prompt-append-char "y"))))
+
+                    (let [lines (buffer-content-lines)]
+                      (test/assert (not (some #(str/includes? (str %) "+a modified") lines))
+                        "Discard failed to remove change"))))))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-hint-highlight-test
+  (let [tmp-dir (temp-file-path "regit-hint-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (write-file (str tmp-dir "/file1.txt") "line1\nline2\n")
+        _ (write-file (str tmp-dir "/file2.txt") "a\nb\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "file1.txt" "file2.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file (str tmp-dir "/file1.txt") "line1 modified\nline2\n")
+        _ (write-file (str tmp-dir "/file2.txt") "a modified\nb\n")
+        status-buffer (status/regit-status tmp-dir false)
+        status-window (first (buffer-windows status-buffer))]
+    (binding [*buffer* status-buffer
+              *window* status-window]
+      (loop [i 0]
+        (if (and (< i 20) (not= :regit-status *mode*))
+          (do (sleep 0.1) (recur (inc i)))
+          nil))
+      (let [lines (buffer-content-lines)
+            file1-header-line (find-line-index lines #(str/includes? % "file1.txt"))
+            file2-header-line (find-line-index lines #(str/includes? % "file2.txt"))
+            unstaged-header-line (find-line-index lines #(str/includes? % "Unstaged changes"))]
+        (test/assert file1-header-line "Could not find file1 header")
+        (test/assert file2-header-line "Could not find file2 header")
+        (test/assert unstaged-header-line "Could not find Unstaged changes header")
+
+        (move-cursor (with-read-lock [lock (buffer-text)] (buffer/line-to-char lock file1-header-line)) false status-window)
+        (let [spans (line-overlay-spans :relay.ui.outline/outline-hint-highlight)]
+          (let [s (first spans)]
+            (test/assert (= file1-header-line (:start s)) "Wrong start for file1 highlight")))
+
+        (outline/toggle-fold)
+        (let [lines-after (buffer-content-lines)
+              hunk-header-line (find-line-index lines-after #(str/includes? % "@@"))]
+          (test/assert hunk-header-line "Could not find hunk header after expand")
+
+          (move-cursor (with-read-lock [lock (buffer-text)] (buffer/line-to-char lock hunk-header-line)) false status-window)
+          (let [spans (line-overlay-spans :relay.ui.outline/outline-hint-highlight)]
+            (let [s (first spans)]
+              (test/assert (= hunk-header-line (:start s))
+                (str "Wrong start for hunk header highlight: " (:start s) " expected " hunk-header-line))))
+
+          (let [hunk-content-line (inc hunk-header-line)]
+            (move-cursor (with-read-lock [lock (buffer-text)] (buffer/line-to-char lock hunk-content-line)) false status-window)
+            (let [spans (line-overlay-spans :relay.ui.outline/outline-hint-highlight)]
+              (let [s (first spans)]
+                (test/assert (= hunk-header-line (:start s)) "Hunk content highlight should start at hunk header")
+                (test/assert (> (:end s) hunk-content-line) "Hunk content highlight should cover full hunk"))))
+
+          (move-cursor (with-read-lock [lock (buffer-text)] (buffer/line-to-char lock hunk-header-line)) false status-window)
+          (outline/toggle-fold)
+          (let [spans (line-overlay-spans :relay.ui.outline/outline-hint-highlight)]
+            (let [s (first spans)]
+              (test/assert (= hunk-header-line (:start s)) "Wrong start after folding hunk")
+              (test/assert (= (inc hunk-header-line) (:end s)) "Folded hunk highlight should be single line")))
+
+          (move-cursor (with-read-lock [lock (buffer-text)] (buffer/line-to-char lock unstaged-header-line)) false status-window)
+          (let [spans (line-overlay-spans :relay.ui.outline/outline-hint-highlight)]
+            (let [s (first spans)]
+              (test/assert (= unstaged-header-line (:start s)) "Wrong start for Unstaged highlight")
+              (test/assert (> (:end s) file2-header-line) "Unstaged highlight should cover children")))
+
+          (move-cursor (with-read-lock [lock (buffer-text)] (buffer/line-to-char lock file2-header-line)) false status-window)
+          (let [spans (line-overlay-spans :relay.ui.outline/outline-hint-highlight)]
+            (let [s (first spans)]
+              (test/assert (= file2-header-line (:start s)) "Leaf highlight should start on child line")
+              (test/assert (= (inc file2-header-line) (:end s)) "Leaf highlight should be limited to child line"))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-diff-header-overlay-test
+  (let [tmp-dir (temp-file-path "regit-diff-header-overlay-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (write-file (str tmp-dir "/file1.txt") "line1\nline2\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "file1.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file (str tmp-dir "/file1.txt") "line1 modified\nline2\n")
+        status-buffer (status/regit-status tmp-dir false)
+        status-window (first (buffer-windows status-buffer))]
+    (binding [*buffer* status-buffer
+              *window* status-window]
+      (loop [i 0]
+        (if (and (< i 20) (not= :regit-status *mode*))
+          (do (sleep 0.1) (recur (inc i)))
+          nil))
+      (let [lines (buffer-content-lines)
+            file1-header-line (find-line-index lines #(str/includes? % "file1.txt"))]
+        (test/assert file1-header-line "Could not find file1 header")
+
+        (move-cursor (with-read-lock [lock (buffer-text)] (buffer/line-to-char lock file1-header-line)) false status-window)
+        (outline/toggle-fold)
+
+        (let [lines-after (buffer-content-lines)
+              hunk-header-line (find-line-index lines-after #(str/includes? % "@@"))]
+          (test/assert hunk-header-line "Could not find hunk header after expand")
+
+          (let [spans (line-overlay-spans :relay.ui.outline/outline-full-line-overlay)]
+            (test/assert (seq spans) "No outline full line overlays found on buffer")
+            (let [matching-span (some (fn [s] (when (= (:start s) hunk-header-line) s)) spans)]
+              (test/assert matching-span
+                (str "Could not find a full line overlay at hunk header line " hunk-header-line ". Spans: " spans))
+              (test/assert (= (:end matching-span) (inc hunk-header-line))
+                (str "Full line overlay length should be 1 line. Got end: " (:end matching-span)))
+              (test/assert (seq (keys (:properties matching-span)))
+                "Overlay properties should not be empty"))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-stage-hunk-updates-buffer-test
+  (let [tmp-dir (temp-file-path "regit-update-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        _ (write-file tracked "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file tracked "line1 modified\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10 modified\n")
+        status-buffer (status/regit-status tmp-dir)
+        status-window (focused-window)]
+    (binding [*buffer* status-buffer
+              *window* status-window]
+      (let [lines (buffer-content-lines)
+            f-line (find-line-index lines #(str/includes? % "modified tracked.txt"))]
+        (test/assert f-line (str "File line not found in " lines))
+        (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock f-line)) false status-window)
+        (outline/toggle-fold)
+        (let [lines-expanded (buffer-content-lines)
+              h1-line (find-line-index lines-expanded #(str/includes? % "+line1 modified"))]
+          (test/assert h1-line (str "Hunk 1 line not found after expansion in " lines-expanded))
+          (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock h1-line)) false status-window)
+          (status/regit-stage)
+          ;; Now check buffer content
+          (let [new-lines (buffer-content-lines)
+                [unstaged-start unstaged-end] (get-section-range new-lines "Unstaged changes")
+                [staged-start staged-end] (get-section-range new-lines "Staged changes")]
+
+            (test/assert unstaged-start "Unstaged changes section missing")
+            (test/assert staged-start "Staged changes section missing")
+
+            ;; Check if hunk is GONE from unstaged
+            (let [unstaged-lines (subvec new-lines unstaged-start unstaged-end)
+                  hunk-in-unstaged? (some #(str/includes? % "+line1 modified") unstaged-lines)]
+              (test/assert (not hunk-in-unstaged?) (str "Staged hunk STILL FOUND in unstaged section: " unstaged-lines)))
+
+            ;; Check if hunk is PRESENT in staged (need to expand)
+            (let [staged-file-line (find-line-index-after new-lines staged-start #(str/includes? % "modified tracked.txt"))]
+              (test/assert staged-file-line (str "Staged file not found in " new-lines))
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock staged-file-line)) false status-window)
+              (outline/toggle-fold)
+              (let [new-lines-expanded (buffer-content-lines)
+                    [staged-start-exp staged-end-exp] (get-section-range new-lines-expanded "Staged changes")
+                    staged-lines (subvec new-lines-expanded staged-start-exp staged-end-exp)
+                    hunk-in-staged? (some #(str/includes? % "+line1 modified") staged-lines)]
+                (test/assert hunk-in-staged? (str "Staged hunk not found in staged section: " staged-lines)))))))
+      (sh! "rm" ["-rf" tmp-dir]))))
+
+(deftest regit-status-stage-only-hunk-removes-file-from-unstaged-test
+  (let [tmp-dir (temp-file-path "regit-remove-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        _ (write-file tracked "line1\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file tracked "line1 modified\n")
+        status-buffer (status/regit-status tmp-dir)
+        status-window (focused-window)]
+    (binding [*buffer* status-buffer
+              *window* status-window]
+      (let [lines (buffer-content-lines)
+            f-line (find-line-index lines #(str/includes? % "modified tracked.txt"))]
+        (test/assert f-line (str "File line not found in " lines))
+        (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock f-line)) false status-window)
+        (status/regit-stage)
+        ;; Now check buffer content
+        (let [new-lines (buffer-content-lines)
+              [unstaged-start unstaged-end] (get-section-range new-lines "Unstaged changes")
+              unstaged-lines (if unstaged-start (subvec new-lines unstaged-start unstaged-end) [])]
+          (test/assert (not (some #(str/includes? % "tracked.txt") unstaged-lines))
+            (str "File STILL FOUND in unstaged section: " unstaged-lines)))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-new-file-node-is-folded-test
+  (let [tmp-dir (temp-file-path "regit-folded-test-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        _ (write-file tracked "line1\nline2\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file tracked "line1 modified\nline2\n")
+        status-buffer (status/regit-status tmp-dir)
+        status-window (focused-window)]
+    (binding [*buffer* status-buffer
+              *window* status-window]
+      (let [lines (buffer-content-lines)
+            f-line (find-line-index lines #(str/includes? % "modified tracked.txt"))]
+        (test/assert f-line (str "File line not found in " lines))
+        (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock f-line)) false status-window)
+        (outline/toggle-fold)
+        (let [lines-expanded (buffer-content-lines)
+              h1-line (find-line-index lines-expanded #(str/includes? % "+line1 modified"))]
+          (test/assert h1-line (str "Hunk 1 line not found in " lines-expanded))
+          (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock h1-line)) false status-window)
+          (status/regit-stage)
+
+          ;; Now check buffer content
+          (let [new-lines (buffer-content-lines)
+                staged-section-idx (find-line-index new-lines #(str/includes? % "Staged changes"))
+                staged-file-line (when staged-section-idx
+                                   (some (fn [i] (when (str/includes? (nth new-lines i) "modified tracked.txt") i))
+                                     (range (inc staged-section-idx) (count new-lines))))]
+            (test/assert staged-file-line (str "Staged file not found in " new-lines))
+
+            ;; Check if it is expanded in the buffer folds.
+            (let [folds (buffer/fold-groups status-buffer)
+                  f-line-folds (filter (fn [f] (= (:start f) staged-file-line)) folds)
+                  file-fold (first f-line-folds)]
+              (test/assert file-fold (str "No fold found for file node at line " staged-file-line ". Buffer: " new-lines))
+              (test/assert (:folded file-fold) (str "New staged file node at line " staged-file-line " is NOT folded in buffer. Buffer: " new-lines))
+
+              ;; Now expand it and check if hunks are expanded
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock staged-file-line)) false status-window)
+              (outline/toggle-fold)
+              (let [expanded-lines (buffer-content-lines)
+                    hunk-header-idx (find-line-index-after expanded-lines (inc staged-file-line) #(str/starts-with? % "@@ "))]
+                (test/assert hunk-header-idx (str "Hunk header not found after expanding file node. Buffer: " expanded-lines))
+                ;; Check if hunk is expanded (should see its content)
+                (let [hunk-content-idx (find-line-index-after expanded-lines (inc hunk-header-idx) #(str/includes? % "+line1 modified"))]
+                  (test/assert hunk-content-idx (str "Hunk is FOLDED but should be EXPANDED. Buffer: " expanded-lines))))))))
+      (sh! "rm" ["-rf" tmp-dir]))))
+
+(defn- press-key [k]
+  (frame/process-key-event (first (keys/parse-key-sequence k))))
+
+(deftest regit-status-repro-issue-test
+  (let [tmp-dir (temp-file-path "regit-repro-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        _ (write-file tracked "line1\nline2\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file tracked "line1 modified\nline2\n")
+        status-buffer (status/regit-status tmp-dir)
+        status-window (focused-window)]
+    (binding [*buffer* status-buffer
+              *window* status-window
+              *frame* (window-frame status-window)]
+      (let [lines (buffer-content-lines)
+            f-line (find-line-index lines #(str/includes? % "modified tracked.txt"))]
+        (test/assert f-line (str "File line not found in " lines))
+
+        ;; 1. Move cursor to a file in "Unstaged changes"
+        (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock f-line)) false status-window)
+
+        ;; 2. Stage it ("s")
+        (press-key "s")
+
+        (let [lines2 (buffer-content-lines)
+              staged-section-idx (find-line-index lines2 #(str/includes? % "Staged changes"))
+              staged-f-line (when staged-section-idx (find-line-index-after lines2 staged-section-idx #(str/includes? % "modified tracked.txt")))]
+          (test/assert staged-f-line (str "Staged file not found after 's' in " lines2))
+
+          ;; 3. Move cursor to that file entry in "Staged changes"
+          (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock staged-f-line)) false status-window)
+
+          ;; 4. Expand it ("<tab>")
+          (press-key "<tab>")
+
+          (let [lines3 (buffer-content-lines)]
+            (test/assert (str/starts-with? (or (nth lines3 (inc staged-f-line)) "") "@@ ")
+              (str "File not expanded after <tab> in " lines3))
+
+            ;; 5. Unstage it ("u")
+            (press-key "u")
+
+            (let [lines4 (buffer-content-lines)
+                  unstaged-section-idx (find-line-index lines4 #(str/includes? % "Unstaged changes"))
+                  unstaged-f-line (when unstaged-section-idx (find-line-index-after lines4 unstaged-section-idx #(str/includes? % "modified tracked.txt")))]
+              (test/assert unstaged-f-line (str "Unstaged file not found after 'u' in " lines4))
+
+              ;; 6. Move cursor to the file entry in "Unstaged changes" and stage it
+              (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock unstaged-f-line)) false status-window)
+              (press-key "s")
+
+              (let [lines5 (buffer-content-lines)
+                    final-staged-section-idx (find-line-index lines5 #(str/includes? % "Staged changes"))
+                    final-staged-f-line (when final-staged-section-idx (find-line-index-after lines5 final-staged-section-idx #(str/includes? % "modified tracked.txt")))]
+                (test/assert final-staged-f-line (str "Final staged file not found in " lines5))
+
+                ;; Verify it is FOLDED. If it's folded, the next line should NOT be "@@ ".
+                (let [next-line (when (< (inc final-staged-f-line) (count lines5)) (nth lines5 (inc final-staged-f-line)))]
+                  (test/assert (not (and next-line (str/starts-with? next-line "@@ ")))
+                    (str "Final staged file entry is EXPANDED but should be FOLDED. Buffer: " lines5))
+
+                  ;; Now expand it and verify hunks are expanded
+                  (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock final-staged-f-line)) false status-window)
+                  (press-key "<tab>")
+                  (let [final-expanded-lines (buffer-content-lines)
+                        hunk-header-idx (find-line-index-after final-expanded-lines (inc final-staged-f-line) #(str/starts-with? % "@@ "))]
+                    (test/assert hunk-header-idx (str "Hunk header not found after expanding final staged file. Buffer: " final-expanded-lines))
+                    (let [hunk-content-idx (find-line-index-after final-expanded-lines (inc hunk-header-idx) #(str/includes? % "+line1 modified"))]
+                      (test/assert hunk-content-idx (str "Hunk is FOLDED in final staged file but should be EXPANDED. Buffer: " final-expanded-lines)))))))))
+        (sh! "rm" ["-rf" tmp-dir])))))
+
+(deftest regit-status-hunk-initially-expanded-test
+  (let [tmp-dir (temp-file-path "regit-hunk-exp-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        tracked (path-join tmp-dir "tracked.txt")
+        _ (write-file tracked "line1\nline2\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (write-file tracked "line1 modified\nline2\n")
+        status-buffer (status/regit-status tmp-dir)
+        status-window (focused-window)]
+    (binding [*buffer* status-buffer
+              *window* status-window
+              *frame* (window-frame status-window)]
+      (let [lines (buffer-content-lines)
+            f-line (find-line-index lines #(str/includes? % "modified tracked.txt"))]
+        ;; 1. File starts folded. Expand it.
+        (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock f-line)) false status-window)
+        (press-key "<tab>")
+        (let [expanded-lines (buffer-content-lines)
+              h1-content (find-line-index expanded-lines #(str/includes? % "+line1 modified"))]
+          (test/assert h1-content "Hunk content not visible after expansion")
+
+          ;; 2. Stage the hunk.
+          (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock h1-content)) false status-window)
+          (press-key "s")
+
+          (let [lines2 (buffer-content-lines)
+                staged-f-line (find-line-index-after lines2 (find-line-index lines2 #(str/includes? % "Staged changes")) #(str/includes? % "modified tracked.txt"))]
+            (test/assert staged-f-line "Staged file header not found")
+
+            ;; 3. File header in Staged changes should be FOLDED.
+            (let [folds (buffer/fold-groups status-buffer)
+                  file-fold (some #(when (= (:start %) staged-f-line) %) folds)]
+              (test/assert (not (or (nil? file-fold) (not (:folded file-fold))))
+                "Staged file header should be initially FOLDED"))
+
+            ;; 4. Expand the file header in Staged changes.
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock staged-f-line)) false status-window)
+            (press-key "<tab>")
+
+            (let [lines3 (buffer-content-lines)
+                  h1-staged-content (find-line-index-after lines3 staged-f-line #(str/includes? % "+line1 modified"))]
+              ;; 5. The hunk inside should be EXPANDED (visible).
+              (test/assert h1-staged-content (str "Hunk content should be visible after expanding newly staged file. Buffer: " lines3)))))))
+    (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-shows-more-than-two-files-test
+  (let [tmp-dir (temp-file-path "regit-many-files-repo")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        _ (dotimes [i 5]
+            (write-file (path-join tmp-dir (str "tracked-" i ".txt")) "initial\n"))
+        _ (sh! "git" ["-C" tmp-dir "add" "."])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (dotimes [i 5]
+            (write-file (path-join tmp-dir (str "tracked-" i ".txt")) "modified\n")
+            (write-file (path-join tmp-dir (str "untracked-" i ".txt")) "new\n"))
+        status-buffer (create-buffer)]
+    (binding [*buffer* status-buffer]
+      (status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))]
+            (test/assert (str/includes? content "Untracked files (5)") (str "Expected Untracked files (5), got content: " content))
+            (test/assert (str/includes? content "Unstaged changes (5)") (str "Expected Unstaged changes (5), got content: " content))
+            (dotimes [i 5]
+              (test/assert (str/includes? content (str "tracked-" i ".txt")) (str "Missing tracked-" i ".txt in content"))
+              (test/assert (str/includes? content (str "untracked-" i ".txt")) (str "Missing untracked-" i ".txt in content")))))))
+    (sh! "rm" ["-rf" tmp-dir])))

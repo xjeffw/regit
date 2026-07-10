@@ -1,0 +1,16 @@
+(ns regit.synthetic
+  (:require [relay.base.mode :as mode]
+            [relay.base.keys :refer [make-keymap map!]])
+  (:use relay.core relay.builtins))
+
+(def regit-synthetic-keymap (make-keymap))
+
+(map! :map regit-synthetic-keymap
+  ("q" #'close-buffer))
+
+(def regit-synthetic-keymaps
+  [regit-synthetic-keymap])
+
+(mode/register-submode :regit-synthetic
+  {:name :regit-synthetic
+   :keymaps regit-synthetic-keymaps})

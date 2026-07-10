@@ -1,0 +1,214 @@
+(ns regit.tests.view-commit
+  (:require [regit.tests.util :refer [assert-focused-buffer-line
+                                      assert-focused-file-line
+                                      buffer-content
+                                      find-line
+                                      git!
+                                      git-cmd
+                                      git-output
+                                      move-to-line
+                                      sh!]]
+            [regit.view-commit :as view-commit]
+            [relay.base.buffer :as buffer]
+            [relay.base.frame :as frame]
+            [relay.base.keys :as keys]
+            [relay.string :as str]
+            [relay.test :as test :refer [deftest is= is-error]]))
+
+(defn- head-commit-id [root]
+  (git-output root "rev-parse" "HEAD"))
+
+(defn- repo-with-middle-line-commit [name]
+  (let [root (temp-file-path name)
+        file-path (path-join root "test.txt")]
+    (sh! "rm" ["-rf" root])
+    (sh! "mkdir" [root])
+    (git! root "init")
+    (git! root "config" "user.name" "Relay Test")
+    (git! root "config" "user.email" "relay@example.com")
+    (write-file file-path "line 1\nline 2\nline 3\n")
+    (git! root "add" "test.txt")
+    (git! root "commit" "-m" "initial")
+    (write-file file-path "line 1\nline 2 changed\nline 3\n")
+    (git! root "add" "test.txt")
+    (git! root "commit" "-m" "second")
+    root))
+
+(deftest regit-view-commit-keymap-binds-enter-and-control-enter-test
+  (is= #'view-commit/regit-view-commit-enter
+    (keys/lookup-keymap view-commit/regit-view-commit-keymap
+      (keys/parse-key-sequence "<enter>")))
+  (is= #'view-commit/regit-view-commit-jump-to-file
+    (keys/lookup-keymap view-commit/regit-view-commit-keymap
+      (keys/parse-key-sequence "C-<enter>"))))
+
+(after! [regit.status :as regit-status]
+  (deftest regit-view-commit-from-status-test
+    (let [tmp-dir (temp-file-path "regit-view-commit-from-status-test")
+          _ (sh! "rm" ["-rf" tmp-dir])
+          _ (sh! "mkdir" [tmp-dir])
+          _ (sh! "git" ["-C" tmp-dir "init"])
+          _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+          _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+          _ (write-file (path-join tmp-dir "f.txt") "1")
+          _ (sh! "git" ["-C" tmp-dir "add" "f.txt"])
+          _ (sh! "git" ["-C" tmp-dir "commit" "-m" "c1"])
+          _ (write-file (path-join tmp-dir "f.txt") "2")
+          _ (sh! "git" ["-C" tmp-dir "add" "f.txt"])
+          _ (sh! "git" ["-C" tmp-dir "commit" "-m" "c2"])]
+      (delete-other-windows)
+      (regit-status/regit-status tmp-dir)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (with-read-lock [lock (buffer-text)]
+                        (str/split-lines (buffer/slice lock 0 (buffer/len-chars lock))))
+                header-line (loop [idx 0
+                                   remaining lines]
+                              (when (seq remaining)
+                                (if (str/includes? (first remaining) "Recent commits (")
+                                  idx
+                                  (recur (inc idx) (rest remaining)))))]
+            (test/assert header-line "Recent commits header not found")
+            (let [target-line (inc header-line)
+                  commit-line (nth lines target-line nil)]
+              (test/assert commit-line "Recent commits section has no entries")
+              (let [commit-id (second (re-find #"^([0-9a-f]{7,40}) " (str/trim commit-line)))]
+                (test/assert commit-id (str "Commit line missing id after Recent commits header: " commit-line))
+                (let [target-char (with-read-lock [lock (buffer-text)]
+                                    (buffer/line-to-char lock target-line))]
+                  (move-cursor target-char false status-window))
+                (binding [*window* status-window
+                          *buffer* status-buffer
+                          *mode* :regit-status
+                          *submodes* #{}]
+                  (frame/process-key-event (first (keys/parse-key-sequence "<enter>"))))
+                (let [root (:regit-root @(buffer-state status-buffer))
+                      view-buffer (when root (view-commit/find-view-commit-buffer root commit-id))]
+                  (test/assert view-buffer "regit-view-commit buffer not opened")
+                  (let [view-window (first
+                                      (filter #(= (:id (window-buffer %)) (:id view-buffer))
+                                        (frame-normal-windows)))]
+                    (test/assert view-window "regit-view-commit window not opened")
+                    (let [info (when root (git-commit-info root commit-id))]
+                      (binding [*window* view-window
+                                *buffer* view-buffer]
+                        (is= :regit-view-commit *mode*)
+                        (let [text (with-read-lock [lock (buffer-text)]
+                                     (buffer/slice lock 0 (buffer/len-chars lock)))
+                              label (:label @(buffer-state view-buffer))]
+                          (test/assert (property-string? label) "regit-view-commit label should preserve styled commit hash")
+                          (test/assert (str/includes? label "regit-commit: ") "regit-view-commit label missing prefix")
+                          (test/assert (str/includes? label "regit-view-commit-from-status-test") "regit-view-commit label missing repo name")
+                          (test/assert (str/includes? label commit-id) "regit-view-commit label missing commit hash")
+                          (test/assert (str/index-of text (str "Commit: " (:id info))) "view-commit buffer missing commit header")
+                          (when-let [summary (:summary info)]
+                            (test/assert (str/index-of text summary) "view-commit buffer missing commit summary"))
+                          (when-let [author (:author info)]
+                            (test/assert (str/index-of text author) "view-commit buffer missing commit author"))))))))))))
+      (sh! "rm" ["-rf" tmp-dir]))))
+
+(deftest regit-view-commit-jump-to-file-test
+  (let [tmp-dir (temp-file-path "regit-view-commit-jump-to-file-test")
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
+        file-path (path-join tmp-dir "test.txt")
+        _ (write-file file-path "line1\nline2\nline3\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
+        _ (write-file file-path "line1\nline2 modified\nline3\n")
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "second commit"])
+        root tmp-dir
+        recent-commits (git-recent-commits root 1)
+        commit (first recent-commits)
+        commit-id (:id commit)
+        entries (git-commit-diff root commit-id)
+        entry (first entries)
+        path (:path entry)]
+    (let [buf (create-buffer)]
+      (swap! (buffer-state buf) assoc :regit-root tmp-dir)
+      (binding [*buffer* buf]
+        (view-commit/regit-view-commit commit-id)
+        (let [view-window (focused-window)
+              view-buffer (window-buffer view-window)]
+          (binding [*window* view-window
+                    *buffer* view-buffer]
+            (let [lines (with-read-lock [lock (buffer-text)]
+                          (str/split-lines (buffer/slice lock 0 (buffer/len-chars lock))))
+                  header (let [{:keys [kind path old-path]} entry]
+                           (str (or (name kind) "changed") " " (if old-path (str old-path " -> " path) path)))
+                  test-line-idx (some (fn [i] (when (str/includes? (nth lines i) header) i))
+                                  (range (count lines)))]
+              (test/assert test-line-idx (str "Could not find header '" header "' in view-commit buffer"))
+              (move-cursor (with-read-lock [lock (buffer-text)]
+                             (buffer/line-to-char lock test-line-idx))
+                false view-window)
+              (view-commit/regit-view-commit-enter)
+              (let [new-buffer (window-buffer view-window)]
+                (is= (path-canonicalize (path-join root path)) (path-canonicalize (:file new-buffer))))))))
+      (sh! "rm" ["-rf" tmp-dir]))))
+
+(deftest regit-view-commit-enter-on-added-hunk-line-jumps-to-commit-line-test
+  (let [root (repo-with-middle-line-commit "regit-view-commit-enter-added-line")
+        file-path (path-join root "test.txt")]
+    (try
+      (delete-other-windows)
+      (let [commit-id (head-commit-id root)
+            source-buffer (create-buffer true)]
+        (swap! (buffer-state source-buffer) assoc :regit-root root)
+        (binding [*buffer* source-buffer]
+          (let [view (view-commit/regit-view-commit commit-id)
+                view-window (focused-window)
+                line (find-line (buffer-content view) "+line 2 changed")]
+            (test/assert line "expected added hunk line in commit view")
+            (move-to-line view view-window line)
+            (view-commit/regit-view-commit-enter)
+            (let [target-buffer (assert-focused-buffer-line 1 "line 2 changed")]
+              (test/assert (str/includes? (:name target-buffer) "*commit[")
+                (str "expected commit synthetic buffer, got " (:name target-buffer)))))))
+      (finally
+        (sh! "rm" ["-rf" root])))))
+
+(deftest regit-view-commit-enter-on-removed-hunk-line-jumps-to-parent-line-test
+  (let [root (repo-with-middle-line-commit "regit-view-commit-enter-removed-line")]
+    (try
+      (delete-other-windows)
+      (let [commit-id (head-commit-id root)
+            source-buffer (create-buffer true)]
+        (swap! (buffer-state source-buffer) assoc :regit-root root)
+        (binding [*buffer* source-buffer]
+          (let [view (view-commit/regit-view-commit commit-id)
+                view-window (focused-window)
+                line (find-line (buffer-content view) "-line 2")]
+            (test/assert line "expected removed hunk line in commit view")
+            (move-to-line view view-window line)
+            (view-commit/regit-view-commit-enter)
+            (let [target-buffer (assert-focused-buffer-line 1 "line 2")]
+              (test/assert (str/includes? (:name target-buffer) "^]: test.txt*")
+                (str "expected parent synthetic buffer, got " (:name target-buffer)))))))
+      (finally
+        (sh! "rm" ["-rf" root])))))
+
+(deftest regit-view-commit-jump-to-file-on-added-hunk-line-jumps-to-working-line-test
+  (let [root (repo-with-middle-line-commit "regit-view-commit-jump-file-added-line")
+        file-path (path-join root "test.txt")]
+    (try
+      (delete-other-windows)
+      (let [commit-id (head-commit-id root)
+            source-buffer (create-buffer true)]
+        (swap! (buffer-state source-buffer) assoc :regit-root root)
+        (binding [*buffer* source-buffer]
+          (let [view (view-commit/regit-view-commit commit-id)
+                view-window (focused-window)
+                line (find-line (buffer-content view) "+line 2 changed")]
+            (test/assert line "expected added hunk line in commit view")
+            (move-to-line view view-window line)
+            (view-commit/regit-view-commit-jump-to-file)
+            (assert-focused-file-line file-path 1 "line 2 changed"))))
+      (finally
+        (sh! "rm" ["-rf" root])))))
