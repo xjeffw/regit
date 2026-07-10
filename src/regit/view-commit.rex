@@ -77,17 +77,14 @@
                 (loop [remaining (seq entries)]
                   (if (seq remaining)
                     (let [e (first remaining)]
-                      (conj children (regit-diff/make-outline-item [:file (:path e)]
-                                       (regit-diff/entry-header-line e {:raw-kind? true})
-                                       [:file (:path e)]
-                                       false
-                                       nil
-                                       nil
-                                       e
-                                       nil
-                                       true
-                                       (atom nil)
-                                       (fn [] (make-file-entry-items e))))
+                      (conj children {:id [:file (:path e)]
+                                      :text (regit-diff/entry-header-line e {:raw-kind? true})
+                                      :landmark [:file (:path e)]
+                                      :initially-expanded? false
+                                      :entry e
+                                      :leaf-hint-span? true
+                                      :children-cache (atom nil)
+                                      :deferred-children (fn [] (make-file-entry-items e))})
                       (recur (rest remaining)))
                     (vec children))))}])
 
@@ -109,7 +106,7 @@
     (filter #(= (:id %) :entries))
     first
     :children
-    (map regit-diff/outline-item-id)))
+    (map :id)))
 
 (defn render-view-commit-buffer! [buffer root commit-id & [opts]]
   (let [tree (build-view-commit-tree root commit-id opts)
@@ -255,7 +252,7 @@
   (let [kind (first id)
         file-path (view-commit-file-path id)
         full-path (path-join root file-path)
-        entry (regit-diff/outline-item-entry item)
+        entry (:entry item)
         hunk-id (view-commit-hunk-id id)
         line-offset (view-commit-line-offset id)
         hunk (when (and entry hunk-id)
@@ -263,7 +260,7 @@
         hunk-info (if hunk
                     (regit-diff/parse-hunk-header (first hunk))
                     {:old-start 1 :new-start 1})
-        line-text (regit-diff/outline-item-text item)]
+        line-text (:text item)]
     (if (= kind :file)
       (regit-diff/open-working-file-at-line! full-path
         (dec (:new-start hunk-info)))
@@ -293,7 +290,7 @@
       (let [state @(buffer-state buffer)
             line (current-line)
             item (get (:line-to-item state) line)
-            id (regit-diff/outline-item-id item)
+            id (:id item)
             root (:regit-root state)
             commit-id (:commit-id state)]
         (if (and root

@@ -266,49 +266,17 @@
     [:hunk section path hunk-id]
     [:hunk path hunk-id]))
 
-(def outline-item-tag :outline-item)
+(defn- item-id-prefix? [prefix id]
+  (and (vector? prefix)
+    (vector? id)
+    (<= (count prefix) (count id))
+    (= prefix (subvec id 0 (count prefix)))))
 
-(defn outline-item? [item]
-  (record-vector? item outline-item-tag))
+(defn- find-item-by-id [items id]
+  (some #(when (= (:id %) id) %) (or items [])))
 
-(defn make-outline-item [id text landmark initially-expanded? line-overlay-style children entry hunk-patch leaf-hint-span? & [children-cache deferred-children item-cache]]
-  [outline-item-tag
-   id
-   text
-   landmark
-   initially-expanded?
-   line-overlay-style
-   children
-   entry
-   hunk-patch
-   leaf-hint-span?
-   children-cache
-   deferred-children
-   item-cache])
-
-(defn outline-item-field [item key idx]
-  (record-get item outline-item-tag key idx))
-
-(defn outline-item-id [item]
-  (outline-item-field item :id 1))
-
-(defn outline-item-text [item]
-  (outline-item-field item :text 2))
-
-(defn outline-item-entry [item]
-  (outline-item-field item :entry 7))
-
-(defn outline-item-hunk-patch [item]
-  (outline-item-field item :hunk-patch 8))
-
-(defn outline-item-log-ref [item]
-  (outline-item-field item :log-ref 13))
-
-(defn outline-item-entries [item]
-  (outline-item-field item :entries 14))
-
-(defn outline-item-stash [item]
-  (outline-item-field item :stash 15))
+(defn- filter-items-by-id-prefix [items prefix]
+  (keepv #(when (item-id-prefix? prefix (:id %)) %) (or items [])))
 
 (defn- diff-line-props [color opts]
   (let [style (if (:highlight-bg? opts)
@@ -338,22 +306,21 @@
         (let [line-text (nth content-lines idx)
               id (conj hunk-path idx)
               cached (when (:preserve-item-cache? opts)
-                       (record-find old-hunk-items outline-item-tag :id 1 id))
+                       (find-item-by-id old-hunk-items id))
               item-cache (when (:preserve-item-cache? opts)
-                           (or (outline-item-field cached :item-cache 12) (atom nil)))
-              item [outline-item-tag
-                    id
-                    line-text
-                    id
-                    false
-                    nil
-                    []
-                    (when (:include-entry? opts) entry)
-                    (when (:include-patch? opts) patch)
-                    false
-                    nil
-                    nil
-                    item-cache]]
+                           (or (:item-cache cached) (atom nil)))
+              item {:id id
+                    :text line-text
+                    :landmark id
+                    :initially-expanded? false
+                    :line-overlay-style nil
+                    :children []
+                    :entry (when (:include-entry? opts) entry)
+                    :hunk-patch (when (:include-patch? opts) patch)
+                    :leaf-hint-span? false
+                    :children-cache nil
+                    :deferred-children nil
+                    :item-cache item-cache}]
           (conj items item)
           (recur (inc idx)))
         (vec items)))))
@@ -398,9 +365,9 @@
                 hunk-rendered-lines (subvec rendered-lines offset (+ offset hunk-line-count))
                 old-items (:old-items opts)
                 old-hunk (when (:preserve-item-cache? opts)
-                           (record-find old-items outline-item-tag :id 1 h-path))
+                           (find-item-by-id old-items h-path))
                 old-hunk-items (when (:preserve-item-cache? opts)
-                                 (record-filter-prefix old-items outline-item-tag :id 1 h-path))
+                                 (filter-items-by-id-prefix old-items h-path))
                 hunk-data (make-diff-hunk-items path hunk hunk (assoc opts
                                                                  :entry entry
                                                                  :preamble preamble
@@ -411,30 +378,28 @@
                                                                  :render-props render-props
                                                                  :rendered-lines hunk-rendered-lines))
                 item-cache (when (:preserve-item-cache? opts)
-                             (or (outline-item-field old-hunk :item-cache 12) (atom nil)))
-                item [outline-item-tag
-                      h-path
-                      (:header hunk-data)
-                      h-path
-                      true
-                      (:header-style hunk-data)
-                      (:items hunk-data)
-                      (when (:include-entry? opts) entry)
-                      (when (:include-patch? opts) (:hunk-patch hunk-data))
-                      true
-                      nil
-                      nil
-                      item-cache]]
+                             (or (:item-cache old-hunk) (atom nil)))
+                item {:id h-path
+                      :text (:header hunk-data)
+                      :landmark h-path
+                      :initially-expanded? true
+                      :line-overlay-style (:header-style hunk-data)
+                      :children (:items hunk-data)
+                      :entry (when (:include-entry? opts) entry)
+                      :hunk-patch (when (:include-patch? opts) (:hunk-patch hunk-data))
+                      :leaf-hint-span? true
+                      :children-cache nil
+                      :deferred-children nil
+                      :item-cache item-cache}]
             (conj items item)
             (recur (rest remaining-hunks) (+ offset hunk-line-count)))
           (vec items))))))
 
 (defn- hunk-outline-item? [item]
-  (and (outline-item? item)
-    (let [id (outline-item-id item)]
-      (and (vector? id)
-        (> (count id) 0)
-        (= (first id) :hunk)))))
+  (let [id (:id item)]
+    (and (vector? id)
+      (> (count id) 0)
+      (= (first id) :hunk))))
 
 (defn diff-context-line-for-line [line buffer]
   (when (and (integer? line) (>= line 0) buffer)
@@ -442,7 +407,7 @@
           item (when (and items (< line (count items)))
                  (get items line))
           entry (when (hunk-outline-item? item)
-                  (outline-item-entry item))]
+                  (:entry item))]
       (when entry
         (entry-header-plain-text entry)))))
 

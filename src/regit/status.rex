@@ -217,9 +217,9 @@
          by-id {}]
     (if (< idx (count nodes))
       (let [node (nth nodes idx)
-            children (regit-diff/outline-item-field node :children 6)
+            children (:children node)
             next-idx (inc idx)
-            by-id (assoc by-id (regit-diff/outline-item-id node) node)]
+            by-id (assoc by-id (:id node) node)]
         (if (seq children)
           (recur children 0 (push-tree-continuation continuations nodes next-idx) by-id)
           (recur nodes next-idx continuations by-id)))
@@ -364,11 +364,11 @@
          ids #{}]
     (if (< idx (count nodes))
       (let [node (nth nodes idx)
-            children (or (regit-diff/outline-item-field node :children 6)
-                       (when-let [cache-atom (regit-diff/outline-item-field node :children-cache 10)]
+            children (or (:children node)
+                       (when-let [cache-atom (:children-cache node)]
                          @cache-atom))
             next-idx (inc idx)
-            ids (conj ids (regit-diff/outline-item-id node))]
+            ids (conj ids (:id node))]
         (if (seq children)
           (recur children 0 (push-tree-continuation continuations nodes next-idx) ids)
           (recur nodes next-idx continuations ids)))
@@ -457,7 +457,7 @@
 (defn- preview-target-at-line [line]
   (let [state @(buffer-state)
         item (get (:line-to-item state) line)
-        path (regit-diff/outline-item-id item)
+        path (:id item)
         root (:regit-root state)]
     (when (and root (vector? path))
       (case (first path)
@@ -523,13 +523,13 @@
   (when-let [root (:regit-root *buffer*)]
     (let [state @(buffer-state)
           item (get (:line-to-item state) line)
-          path (regit-diff/outline-item-id item)]
+          path (:id item)]
       (when (vector? path)
         (let [type (first path)
               section (second path)]
           (case type
             :section
-            (let [entries (regit-diff/outline-item-entries item)]
+            (let [entries (:entries item)]
               (when (and (case section
                            :untracked (or (= operation :stage) (= operation :discard))
                            :unstaged (or (= operation :stage) (= operation :discard))
@@ -539,7 +539,7 @@
                 {:scope :section :section section :operation operation :entries entries}))
 
             :file
-            (let [entry (regit-diff/outline-item-entry item)]
+            (let [entry (:entry item)]
               (when (and entry (case section
                                  :untracked (or (= operation :stage) (= operation :discard))
                                  :unstaged (or (= operation :stage) (= operation :discard))
@@ -548,8 +548,8 @@
                 {:scope :file :section section :operation operation :entry entry}))
 
             :hunk
-            (let [entry (regit-diff/outline-item-entry item)
-                  patch (regit-diff/outline-item-hunk-patch item)]
+            (let [entry (:entry item)
+                  patch (:hunk-patch item)]
               (when (and entry patch (case section
                                        :unstaged (or (= operation :stage) (= operation :discard))
                                        :staged (or (= operation :unstage) (= operation :discard))
@@ -563,7 +563,7 @@
             :stash
             (when (= operation :discard)
               (let [stash-id section
-                    stash (regit-diff/outline-item-stash item)]
+                    stash (:stash item)]
                 {:scope :stash
                  :operation :drop
                  :stash-id stash-id
@@ -1081,8 +1081,8 @@
       (let [line (current-line)
             state @(buffer-state buffer)
             item (get (:line-to-item state) line)
-            path (regit-diff/outline-item-id item)]
-        (if-let [log-ref (when (not force-file?) (regit-diff/outline-item-log-ref item))]
+            path (:id item)]
+        (if-let [log-ref (when (not force-file?) (:log-ref item))]
           (regit-log-target (:regit-root buffer) log-ref)
           (if-let [commit-id (when (and (vector? path) (= (first path) :commit)) (nth path 2))]
             (let [target (preview-target :commit (:regit-root buffer) commit-id)]
@@ -1122,7 +1122,7 @@
                   ;; Jump into diff (or real file if force-file? is true)
                       (let [hunk-id (if (= type :file) nil (nth path 3))
                             line-offset (if (= type :file) 0 (nth path 4 0))
-                            entry (regit-diff/outline-item-entry item)
+                            entry (:entry item)
                             diff (or (:diff entry) "")
                             lines (str/split-lines diff)
                             {:keys [preamble hunks]} (regit-diff/split-diff-hunks lines)
@@ -1135,7 +1135,7 @@
                             parsed-header (if hunk
                                             (regit-diff/parse-hunk-header (first hunk))
                                             {:old-start 1 :new-start 1})
-                            dest-info (let [line-text (str/triml (regit-diff/outline-item-text item))]
+                            dest-info (let [line-text (str/triml (:text item))]
                                         (if (or force-file? (= type :file))
                                           {:file full-path :type :new :start (:new-start parsed-header)}
                                           (cond
@@ -1238,7 +1238,7 @@
   (let [line (current-line)
         state @(buffer-state)
         item (get (:line-to-item state) line)
-        path (regit-diff/outline-item-id item)
+        path (:id item)
         root (:regit-root state)]
     (if (and (vector? path) (= (first path) :stash))
       (let [stash-id (second path)]

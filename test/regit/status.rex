@@ -816,7 +816,7 @@
                 push-line-idx (find-line-index lines #(str/includes? (str %) "Push:"))
                 item (get (:line-to-item @(buffer-state status-buffer)) push-line-idx)]
             (test/assert push-line-idx "Could not find Push line in status buffer")
-            (is= "origin/main" (regit-diff/outline-item-log-ref item))
+            (is= "origin/main" (:log-ref item))
             (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
                            (buffer/line-to-char lock push-line-idx))
               false status-window)
@@ -993,9 +993,9 @@
           (let [lines (buffer-content-lines)
                 file-line (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt")]
             (let [item (get (:line-to-item @(buffer-state status-buffer)) file-line)
-                  children (regit-diff/outline-item-field item :children 6)
-                  deferred (regit-diff/outline-item-field item :deferred-children 11)
-                  entry (regit-diff/outline-item-entry item)]
+                  children (:children item)
+                  deferred (:deferred-children item)
+                  entry (:entry item)]
               (test/assert (or (seq children) deferred)
                 "conflict file item should have deferred diff children")
               (test/assert (str/includes? (str (:diff entry)) "@@@")
@@ -1403,7 +1403,7 @@
               (status/regit-stage)
 
               (let [current (current-line status-buffer)
-                    path (regit-diff/outline-item-id (get (:line-to-item @(buffer-state status-buffer)) current))]
+                    path (:id (get (:line-to-item @(buffer-state status-buffer)) current))]
                 (test/assert (and (vector? path)
                                (= (first path) :hunk)
                                (= (nth path 1) :unstaged)
@@ -1413,7 +1413,7 @@
               (status/regit-stage)
 
               (let [current (current-line status-buffer)
-                    path (regit-diff/outline-item-id (get (:line-to-item @(buffer-state status-buffer)) current))]
+                    path (:id (get (:line-to-item @(buffer-state status-buffer)) current))]
                 (test/assert (and (vector? path)
                                (= (first path) :hunk)
                                (= (nth path 1) :unstaged)

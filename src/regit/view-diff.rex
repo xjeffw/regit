@@ -64,17 +64,14 @@
       :landmark [:entries]
       :children (if (seq entries)
                   (mapv (fn [e]
-                          (regit-diff/make-outline-item [:file (:path e)]
-                            (regit-diff/entry-header-line e)
-                            [:file (:path e)]
-                            false
-                            nil
-                            nil
-                            e
-                            nil
-                            true
-                            (atom nil)
-                            (fn [] (make-file-entry-items section e))))
+                          {:id [:file (:path e)]
+                           :text (regit-diff/entry-header-line e)
+                           :landmark [:file (:path e)]
+                           :initially-expanded? false
+                           :entry e
+                           :leaf-hint-span? true
+                           :children-cache (atom nil)
+                           :deferred-children (fn [] (make-file-entry-items section e))})
                     entries)
                   [{:id :no-changes :text (str "  (no " (str/lower-case (section-title section)) ")")}])}]))
 
@@ -83,7 +80,7 @@
     (filter #(= (:id %) :entries))
     first
     :children
-    (map regit-diff/outline-item-id)))
+    (map :id)))
 
 (defn- render-view-diff-buffer! [buffer root section]
   (let [tree (build-view-diff-tree root section)]
@@ -166,7 +163,7 @@
   (let [kind (first id)
         file-path (second id)
         full-path (path-join root file-path)
-        entry (regit-diff/outline-item-entry item)
+        entry (:entry item)
         hunk-id (when (and (= kind :hunk) (>= (count id) 3)) (nth id 2))
         line-offset (if (and (= kind :hunk) (>= (count id) 4)) (nth id 3) 0)
         hunk-id-section (view-diff-hunk-id-section section)
@@ -175,7 +172,7 @@
         hunk-info (if hunk
                     (regit-diff/parse-hunk-header (first hunk))
                     {:old-start 1 :new-start 1})
-        line-text (regit-diff/outline-item-text item)]
+        line-text (:text item)]
     (if (= kind :file)
       (regit-diff/open-working-file-at-line! full-path
         (dec (:new-start hunk-info)))
@@ -205,7 +202,7 @@
       (let [state @(buffer-state buffer)
             line (current-line)
             item (get (:line-to-item state) line)
-            id (regit-diff/outline-item-id item)
+            id (:id item)
             root (:regit-root state)
             section (:regit-diff-section state)]
         (if (and root

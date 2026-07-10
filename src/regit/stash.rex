@@ -112,7 +112,7 @@
   (when (= *mode* :regit-status)
     (let [state @(buffer-state)
           item (get (:line-to-item state) (current-line))
-          path (regit-diff/outline-item-id item)]
+          path (:id item)]
       (when (and (vector? path) (= (first path) :stash))
         (second path)))))
 

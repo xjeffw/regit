@@ -75,17 +75,14 @@
       :landmark [:section :staged]
       :children (if (seq staged-entries)
                   (mapv (fn [e]
-                          (regit-diff/make-outline-item [:file :staged (:path e)]
-                            (regit-diff/entry-header-line e {:raw-kind? true})
-                            [:file :staged (:path e)]
-                            false
-                            nil
-                            nil
-                            e
-                            nil
-                            true
-                            (atom nil)
-                            (fn [] (make-file-entry-items :staged e))))
+                          {:id [:file :staged (:path e)]
+                           :text (regit-diff/entry-header-line e {:raw-kind? true})
+                           :landmark [:file :staged (:path e)]
+                           :initially-expanded? false
+                           :entry e
+                           :leaf-hint-span? true
+                           :children-cache (atom nil)
+                           :deferred-children (fn [] (make-file-entry-items :staged e))})
                     staged-entries)
                   [{:id :no-staged :text "  (no changes)"}])}
      {:id [:section :unstaged]
@@ -93,17 +90,14 @@
       :landmark [:section :unstaged]
       :children (if (seq unstaged-entries)
                   (mapv (fn [e]
-                          (regit-diff/make-outline-item [:file :unstaged (:path e)]
-                            (regit-diff/entry-header-line e {:raw-kind? true})
-                            [:file :unstaged (:path e)]
-                            false
-                            nil
-                            nil
-                            e
-                            nil
-                            true
-                            (atom nil)
-                            (fn [] (make-file-entry-items :unstaged e))))
+                          {:id [:file :unstaged (:path e)]
+                           :text (regit-diff/entry-header-line e {:raw-kind? true})
+                           :landmark [:file :unstaged (:path e)]
+                           :initially-expanded? false
+                           :entry e
+                           :leaf-hint-span? true
+                           :children-cache (atom nil)
+                           :deferred-children (fn [] (make-file-entry-items :unstaged e))})
                     unstaged-entries)
                   [{:id :no-unstaged :text "  (no changes)"}])}]))
 
@@ -111,7 +105,7 @@
   (->> tree
     (filter #(and (vector? (:id %)) (= (first (:id %)) :section)))
     (mapcat :children)
-    (map regit-diff/outline-item-id)))
+    (map :id)))
 
 (defn- render-view-stash-buffer! [buffer root stash-id & [opts]]
   (let [tree (build-view-stash-tree root stash-id)
@@ -240,7 +234,7 @@
         section (second id)
         file-path (nth id 2)
         full-path (path-join root file-path)
-        entry (regit-diff/outline-item-entry item)
+        entry (:entry item)
         hunk-id (when (and (= kind :hunk) (>= (count id) 4)) (nth id 3))
         line-offset (if (and (= kind :hunk) (>= (count id) 5)) (nth id 4) 0)
         hunk (when (and entry hunk-id)
@@ -248,7 +242,7 @@
         hunk-info (if hunk
                     (regit-diff/parse-hunk-header (first hunk))
                     {:old-start 1 :new-start 1})
-        line-text (regit-diff/outline-item-text item)]
+        line-text (:text item)]
     (if (= kind :file)
       (regit-diff/open-working-file-at-line! full-path
         (dec (:new-start hunk-info)))
@@ -262,7 +256,7 @@
   (let [line (current-line)
         state @(buffer-state)
         item (get (:line-to-item state) line)
-        path (regit-diff/outline-item-id item)
+        path (:id item)
         root (:regit-root state)
         stash-id (:stash-id state)
         refresh-fn #(call-var regit.status/refresh-status! %)]
@@ -315,7 +309,7 @@
       (let [state @(buffer-state buffer)
             line (current-line)
             item (get (:line-to-item state) line)
-            id (regit-diff/outline-item-id item)
+            id (:id item)
             root (:regit-root state)
             stash-id (:stash-id state)]
         (if (and root
