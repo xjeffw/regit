@@ -131,7 +131,7 @@
 (defn- current-branch [root]
   (try
     (git-current-branch root)
-    (catch _ (git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
+    (catch exception _ (git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
 
 (defn- local-branches [root]
   (vec (git-local-branches root)))

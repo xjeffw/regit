@@ -15,7 +15,7 @@
 (defn- current-branch [root]
   (try
     (git-current-branch root)
-    (catch _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
+    (catch exception _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
 
 (defn- get-push-remote [root branch]
   (get-git-output root "rev-parse" "--abbrev-ref" "--symbolic-full-name" (str branch "@{push}")))
@@ -31,7 +31,7 @@
   (try
     (let [out (get-git-output root "remote")]
       (if (str/blank? out) [] (str/split-lines out)))
-    (catch _ [])))
+    (catch exception _ [])))
 
 (defn- run-git-fetch [root target]
   (let [cmd-args (cond-> ["fetch"]

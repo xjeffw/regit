@@ -52,7 +52,7 @@
 (defn- current-branch [root]
   (try
     (git-current-branch root)
-    (catch _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
+    (catch exception _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
 
 (defn- current-branch-label [root]
   (or (current-branch root) "detached head"))
@@ -107,7 +107,7 @@
       (let [should-focus? (if start-window (= (focused-window) start-window) nil)]
         (or (call-var regit.status/refresh-status! root should-focus?)
           (call-var regit.status/regit-status root should-focus?))))
-    (catch _ nil)))
+    (catch exception _ nil)))
 
 (defn- after-git-change! [root start-window]
   (git-refresh-index root)

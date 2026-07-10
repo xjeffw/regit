@@ -131,7 +131,7 @@
       (f)
       (refresh-after-git-change! root success-message)
       nil
-      (catch e
+      (catch exception e
         (let [msg (ex-message e)]
           (message msg)
           msg)))))

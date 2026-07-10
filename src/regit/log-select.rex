@@ -171,7 +171,7 @@
   [root message pick-fn & [opts]]
   (let [root (str root)
         opts (or opts {})
-        target (or (:target opts) (try (git-current-branch root) (catch _ "HEAD")))
+        target (or (:target opts) (try (git-current-branch root) (catch exception _ "HEAD")))
         return-window (or (:return-window opts) (focused-window))
         window (or return-window (focused-window))
         buffer (create-buffer true)]

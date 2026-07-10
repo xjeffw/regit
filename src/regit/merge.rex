@@ -21,7 +21,7 @@
 (defn- current-branch [root]
   (try
     (git-current-branch root)
-    (catch _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
+    (catch exception _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
 
 (defn- branch-exists? [root branch]
   (zero? (:code (git-cmd! root "show-ref" "--verify" "--quiet" (str "refs/heads/" branch)))))
@@ -134,7 +134,7 @@
 (defn- read-git-file-lines [root file]
   (let [path (git-file root file)]
     (if (and path (path-exists? path))
-      (vec (->> (str/split (try (read-file path) (catch _ "")) #"\r?\n")
+      (vec (->> (str/split (try (read-file path) (catch exception _ "")) #"\r?\n")
              (map str/trim)
              (remove str/blank?)))
       [])))

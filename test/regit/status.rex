@@ -1227,7 +1227,7 @@
         (when-let [buffer @opened-buffer]
           (try
             (kill-buffer buffer)
-            (catch e nil)))
+            (catch exception e nil)))
         (run-shell* "rm" ["-rf" tmp-dir])))))
 
 (deftest regit-status-stage-and-unstage-hunk-from-content-line-test

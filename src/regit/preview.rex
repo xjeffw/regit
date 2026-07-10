@@ -26,13 +26,13 @@
         (binding [*buffer* source-buffer
                   *window* source-window]
           (selected-target-fn))))
-    (catch _ false)))
+    (catch exception _ false)))
 
 (defn- buffer-listed? [buffer & [attempt]]
   (when buffer
     (try
       (some #(= (:id %) (:id buffer)) (list-buffers))
-      (catch _
+      (catch exception _
         (if (< (or attempt 0) 3)
           (do
             (sleep (ms->duration 10))
@@ -43,7 +43,7 @@
   (when preview-buffer
     (let [preview-windows (try
                             (vec (buffer-windows preview-buffer))
-                            (catch _ []))
+                            (catch exception _ []))
           fallback-window (or preview-window source-window (focused-window))]
       (doseq [window (if (seq preview-windows)
                        preview-windows
@@ -62,7 +62,7 @@
   (when-let [task (:future preview)]
     (try
       (future-running? task)
-      (catch _ false))))
+      (catch exception _ false))))
 
 (defn- preview-live? [preview]
   (or (preview-future-running? preview)
@@ -218,7 +218,7 @@
             (cleanup-orphaned-preview-buffers! source-buffer
               (:regit-preview @(buffer-state source-buffer)))
             false))))
-    (catch _
+    (catch exception _
       (clear-preview-if-current! source-buffer token)
       (close-preview-buffer! preview-buffer source-window nil)
       (cleanup-orphaned-preview-buffers! source-buffer
@@ -260,7 +260,7 @@
                                  (when preview-buffer
                                    (register-preview-buffer! source-buffer token preview-buffer)
                                    (display-preview-buffer! source-buffer source-window token target selected-target-fn preview-buffer))))))
-                         (catch _
+                         (catch exception _
                            (let [preview (:regit-preview @(buffer-state source-buffer))]
                              (when (= token (:token preview))
                                (clear-preview-if-current! source-buffer token)

@@ -42,7 +42,7 @@
 (defn- current-branch [root]
   (try
     (git-current-branch root)
-    (catch _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
+    (catch exception _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
 
 (defn- git-dir [root]
   (let [dir (get-git-output root "rev-parse" "--git-dir")]
@@ -73,7 +73,7 @@
     (when (and path (path-exists? path))
       (try
         (str/trim (read-file path))
-        (catch _ nil)))))
+        (catch exception _ nil)))))
 
 (defn- read-state-lines [root file]
   (let [text (read-state-file root file)]
@@ -369,7 +369,7 @@
         msg)
       (let [buffer (create-buffer true)
             window (or return-window (focused-window))
-            text (augment-rebase-todo-text (try (read-file todo-path) (catch _ "")))]
+            text (augment-rebase-todo-text (try (read-file todo-path) (catch exception _ "")))]
         (frame/with-render-coalescing
           (set-buffer-name (str "*git-rebase-todo: " (or (path-filename root) root) "*") buffer)
           (swap! (buffer-state buffer) assoc
@@ -402,7 +402,7 @@
   (if-let [todo-path (editable-rebase-todo-path root)]
     (let [buffer (create-buffer true)
           window (or return-window (focused-window))
-          text (augment-rebase-todo-text (try (read-file todo-path) (catch _ "")))]
+          text (augment-rebase-todo-text (try (read-file todo-path) (catch exception _ "")))]
       (frame/with-render-coalescing
         (set-buffer-name (str "*git-rebase-todo: " (or (path-filename root) root) "*") buffer)
         (swap! (buffer-state buffer) assoc

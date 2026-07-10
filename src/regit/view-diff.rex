@@ -135,7 +135,7 @@
         (ignore-errors
           (mode/enable-submode :regit-synthetic)))
       buffer)
-    (catch e
+    (catch exception e
       (message (str "Failed to open synthetic file: " (ex-message e)))
       nil)))
 

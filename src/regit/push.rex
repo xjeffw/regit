@@ -21,7 +21,7 @@
 (defn- current-branch [root]
   (try
     (git-current-branch root)
-    (catch _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
+    (catch exception _ (get-git-output root "rev-parse" "--abbrev-ref" "HEAD"))))
 
 (defn- get-push-remote [root branch]
   (get-git-output root "rev-parse" "--abbrev-ref" "--symbolic-full-name" (str branch "@{push}")))
@@ -33,7 +33,7 @@
   (try
     (let [branches (git-remote-branches root)]
       (vec (remove str/blank? branches)))
-    (catch _ [])))
+    (catch exception _ [])))
 
 (defn- run-git-push [root args-values remote-target branch]
   (let [force? (:force-with-lease args-values)

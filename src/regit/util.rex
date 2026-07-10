@@ -130,7 +130,7 @@
         buffer (create-buffer)
         content (try
                   (read-file message-path)
-                  (catch _ ""))]
+                  (catch exception _ ""))]
     (ensure-commit-message-mode!)
     (frame/with-render-coalescing
       (set-buffer-name (commit-buffer-name root) buffer)

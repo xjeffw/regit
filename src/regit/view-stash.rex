@@ -55,8 +55,8 @@
       (list-buffers))))
 
 (defn- build-view-stash-tree [root stash-id]
-  (let [staged-entries (try (git-commit-diff root (str stash-id "^2")) (catch _ []))
-        unstaged-entries (try (git-commit-diff root stash-id (str stash-id "^2")) (catch _ []))
+  (let [staged-entries (try (git-commit-diff root (str stash-id "^2")) (catch exception _ []))
+        unstaged-entries (try (git-commit-diff root stash-id (str stash-id "^2")) (catch exception _ []))
         stashes (git-stashes root)
         stash (some #(when (= (:id %) stash-id) %) stashes)]
     [{:id :heading
@@ -184,8 +184,8 @@
 
 (defn- get-entry-for-path [root stash-id section file-path]
   (let [entries (if (= section :staged)
-                  (try (git-commit-diff root (str stash-id "^2")) (catch _ []))
-                  (try (git-commit-diff root stash-id (str stash-id "^2")) (catch _ [])))]
+                  (try (git-commit-diff root (str stash-id "^2")) (catch exception _ []))
+                  (try (git-commit-diff root stash-id (str stash-id "^2")) (catch exception _ [])))]
     (some #(when (= (:path %) file-path) %) entries)))
 
 (defn- open-synthetic-file! [root path ref name]
@@ -200,7 +200,7 @@
         (ignore-errors
           (mode/enable-submode :regit-synthetic)))
       buffer)
-    (catch e
+    (catch exception e
       (message (str "Failed to open synthetic file: " (ex-message e)))
       nil)))
 

@@ -894,7 +894,7 @@
           :regit-root root
           :regit-conflict-choice-preview? true)
         buffer)
-      (catch e
+      (catch exception e
         (set-buffer-name "*regit-conflict-preview-error*" buffer)
         (set-string (str "regit conflict preview failed: " (ex-message e)) buffer)
         (set-buffer-read-only true buffer)
@@ -940,7 +940,7 @@
   (doseq [buf (seq (buffers-for-path path))]
     (try
       (notify-buffer-file-git-change! buf)
-      (catch e nil))))
+      (catch exception e nil))))
 
 (defn- notify-file-git-change-for-target! [root target]
   (let [entries (case (:scope target)
@@ -958,7 +958,7 @@
   (doseq [buf (project/project-file-buffers root)]
     (try
       (notify-buffer-file-git-change! buf)
-      (catch e nil))))
+      (catch exception e nil))))
 
 (defn- execute-status-target! [target & [preferred-path]]
   (with-status-buffer-pending (:regit-root *buffer*)
@@ -969,12 +969,12 @@
         (git-clear-repo-cache)
         (notify-file-git-change-for-target! (str root) target))
       (rerender-status-buffer! preferred-path)
-      (catch e
+      (catch exception e
         (message (ex-message e))
         (try
           (git-clear-repo-cache)
           (rerender-status-buffer! preferred-path)
-          (catch _ nil))))))
+          (catch exception _ nil))))))
 
 (defn- perform-stash-operation! [root operation stash-id]
   (case operation
@@ -991,7 +991,7 @@
         (git-clear-repo-cache)
         (notify-project-file-git-change! root))
       (rerender-status-buffer!)
-      (catch e
+      (catch exception e
         (message (ex-message e))))))
 
 (defn- confirm-target-operation! [target]
@@ -1067,7 +1067,7 @@
       (binding [*buffer* buffer]
         (mode/enable-submode :regit-synthetic))
       buffer)
-    (catch e
+    (catch exception e
       (message (str "Failed to open synthetic file: " (ex-message e)))
       nil)))
 
@@ -1245,7 +1245,7 @@
             (git-refresh-index root)
             (git-clear-repo-cache)
             (notify-project-file-git-change! root)
-            (catch e
+            (catch exception e
               (message (ex-message e)))
             (finally
               (refresh-status! root)))))
