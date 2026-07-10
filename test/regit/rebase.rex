@@ -22,6 +22,7 @@
                                       move-focused-line!
                                       move-focused-line-containing!
                                       send-keys
+                                      sh!
                                       status-content
                                       wait-for-focused-status
                                       wait-for-message]]
@@ -47,8 +48,8 @@
 
 (defn- init-rebase-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")
@@ -69,8 +70,8 @@
 
 (defn- init-conflicted-rebase-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")

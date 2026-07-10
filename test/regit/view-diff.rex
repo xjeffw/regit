@@ -8,6 +8,7 @@
                                       git-cmd
                                       move-to-line
                                       repo-with-middle-line-change
+                                      sh!
                                       window-for-buffer]]
             [regit.view-diff :as view-diff]
             [rex.base.buffer :as buffer]
@@ -25,17 +26,17 @@
 
 (deftest regit-view-diff-test
   (let [tmp-dir (temp-file-path "regit-view-diff-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "line 1\nline 2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file file-path "line 1 changed\nline 2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})]
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])]
     (delete-other-windows)
     (let [buf (create-buffer)]
       (swap! (buffer-state buf) assoc :regit-root tmp-dir)
@@ -60,19 +61,19 @@
                 (str "regit-view-diff buffer missing staged header. Got: " text))
               (test/assert (str/includes? text "+line 1 changed")
                 (str "regit-view-diff buffer missing staged diff. Got: " text)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-view-diff-unstaged-summary-test
   (let [tmp-dir (temp-file-path "regit-view-diff-unstaged-summary-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "worktree.txt")
         _ (write-file file-path "keep\nremove\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "worktree.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "worktree.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file file-path "keep\nadded\n")]
     (delete-other-windows)
     (let [buf (create-buffer)]
@@ -98,7 +99,7 @@
                 (str "regit-view-diff buffer missing unstaged header. Got: " text))
               (test/assert (str/includes? text "+added")
                 (str "regit-view-diff buffer missing unstaged diff. Got: " text)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-view-diff-enter-on-added-hunk-line-jumps-to-added-line-test
   (let [root (repo-with-middle-line-change "regit-view-diff-enter-added-line")
@@ -116,7 +117,7 @@
           (view-diff/regit-view-diff-enter))
         (assert-focused-file-line file-path 1 "line 2 changed"))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-view-diff-enter-on-removed-staged-hunk-line-opens-base-line-test
   (let [root (repo-with-middle-line-change "regit-view-diff-enter-removed-staged")]
@@ -136,7 +137,7 @@
           (test/assert (str/includes? (:name target-buffer) "*staged-base: test.txt*")
             (str "expected staged base synthetic buffer, got " (:name target-buffer)))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-view-diff-opened-from-status-enter-on-added-staged-line-opens-index-line-test
   (let [root (repo-with-middle-line-change "regit-view-diff-status-staged-added-line")]
@@ -166,7 +167,7 @@
                 (test/assert (str/includes? (:name target-buffer) "*staged: test.txt*")
                   (str "expected staged synthetic buffer, got " (:name target-buffer))))))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-view-diff-jump-to-file-on-removed-staged-hunk-line-jumps-to-working-line-test
   (let [root (repo-with-middle-line-change "regit-view-diff-jump-file-removed-staged")
@@ -185,4 +186,4 @@
           (view-diff/regit-view-diff-jump-to-file))
         (assert-focused-file-line file-path 1 "line 2 changed"))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))

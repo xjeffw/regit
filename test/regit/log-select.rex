@@ -1,14 +1,14 @@
 (ns regit.tests.log-select
   (:require [regit.log-select :as log-select]
-            [regit.tests.util :refer [buffer-content cleanup git! git-out]]
+            [regit.tests.util :refer [buffer-content cleanup git! git-out sh!]]
             [rex.base.buffer :as buffer]
             [rex.string :as str]
             [rex.test :as test :refer [deftest is=]]))
 
 (defn- init-log-select-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")

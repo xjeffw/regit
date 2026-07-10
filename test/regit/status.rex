@@ -1,6 +1,6 @@
 (ns regit.tests.status
   (:require [regit.status :as status]
-            [regit.tests.util :refer [buffer-content-lines git! git-cmd]]
+            [regit.tests.util :refer [buffer-content-lines git! git-cmd sh!]]
             [rex.base.buffer :as buffer]
             [rex.base.frame :as frame]
             [rex.base.keys :as keys]
@@ -26,8 +26,8 @@
 
 (defn- init-conflicted-merge-repo-with-content [name base-content ours-content theirs-content]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.name" "Rex Test")
         _ (git! tmp-dir "config" "user.email" "rex@example.com")
@@ -52,8 +52,8 @@
 
 (defn- init-special-conflict-repo [name conflict-kind]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.name" "Rex Test")
         _ (git! tmp-dir "config" "user.email" "rex@example.com")
@@ -67,7 +67,7 @@
     (git! tmp-dir "branch" "-M" "main")
     (git! tmp-dir "checkout" "-b" "feature")
     (case conflict-kind
-      :deleted-by-them (run-shell* "rm" ["-f" (str conflict-path)] {:direnv false})
+      :deleted-by-them (sh! "rm" ["-f" (str conflict-path)])
       :deleted-by-us (write-file conflict-path "theirs\n")
       :both-added (write-file conflict-path "theirs\n")
       nil)
@@ -76,7 +76,7 @@
     (git! tmp-dir "checkout" "main")
     (case conflict-kind
       :deleted-by-them (write-file conflict-path "ours\n")
-      :deleted-by-us (run-shell* "rm" ["-f" (str conflict-path)] {:direnv false})
+      :deleted-by-us (sh! "rm" ["-f" (str conflict-path)])
       :both-added (write-file conflict-path "ours\n")
       nil)
     (git! tmp-dir "add" "-A")
@@ -147,9 +147,9 @@
 
 (deftest regit-status-jump-to-file-test
   (let [tmp-dir (temp-file-path "regit-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "hello")
         status-buffer (create-buffer)]
@@ -168,17 +168,17 @@
             (status/regit-status-enter)
             (let [new-buffer (window-buffer status-window)]
               (is= (path-canonicalize file-path) (path-canonicalize (:file new-buffer))))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-jump-to-hunk-line-test
   (let [tmp-dir (temp-file-path "regit-hunk-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "line1\nline2\nline3\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file file-path "line1\nline2 modified\nline3\n")
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
@@ -204,21 +204,21 @@
                     new-cursor (current-line new-buffer)]
                 (is= (path-canonicalize file-path) (path-canonicalize (:file new-buffer)))
                 (is= 1 new-cursor)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-jump-to-file-from-staged-hunk-test
   (let [tmp-dir (temp-file-path "regit-hunk-test-repo-staged")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "line1\nline2\nline3\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file file-path "line1\nline2 modified\nline3\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
@@ -243,23 +243,23 @@
                     new-cursor (current-line new-buffer)]
                 (is= (path-canonicalize file-path) (path-canonicalize (:file new-buffer)))
                 (is= 1 new-cursor)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-enter-on-change-section-opens-view-diff-test
   (let [tmp-dir (temp-file-path "regit-status-enter-section-diff-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         index-path (path-join tmp-dir "index.txt")
         worktree-path (path-join tmp-dir "worktree.txt")
         _ (write-file index-path "keep\nremove\n")
         _ (write-file worktree-path "keep\nremove\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "index.txt" "worktree.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "index.txt" "worktree.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file index-path "keep\nstaged\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "index.txt"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "index.txt"])
         _ (write-file worktree-path "keep\nunstaged\n")
         status-buffer (create-buffer)]
     (delete-other-windows)
@@ -314,21 +314,21 @@
                     (str "Staged diff missing summary for index.txt. Got: " text))
                   (test/assert (not (str/includes? text "worktree.txt | 2 +-"))
                     (str "Staged diff unexpectedly included unstaged summary. Got: " text)))))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-stash-test
   (let [tmp-dir (temp-file-path "regit-stash-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "hello\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file file-path "hello modified\n")
-        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"])
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
@@ -358,24 +358,24 @@
                     (let [expanded-text (with-read-lock [lock (buffer-text)] (buffer/slice lock 0 (buffer/len-chars lock)))]
                       (test/assert (str/includes? expanded-text "+hello modified")
                         (str "regit-view-stash buffer missing expected diff content. Got: " expanded-text)))))))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-previews-commit-and-promotes-stash-test
   (let [tmp-dir (temp-file-path "regit-status-preview-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "one\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "first preview commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "first preview commit"])
         _ (write-file file-path "two\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "second preview commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "second preview commit"])
         _ (write-file file-path "stash change\n")
-        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "preview stash"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "preview stash"])
         status-buffer (create-buffer)]
     (delete-other-windows)
     (binding [*buffer* status-buffer]
@@ -454,19 +454,19 @@
                       (move-cursor 0 false status-window)
                       (test/assert (some #(= (:id %) (:id preview-buffer)) (list-buffers))
                         "Promoted stash preview buffer was killed after moving the status cursor")))))))))
-      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
+      (sh! "rm" ["-rf" tmp-dir]))))
 
 (deftest regit-status-preview-disabled-test
   (let [tmp-dir (temp-file-path "regit-status-preview-disabled-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "preview disabled\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "disabled status preview commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "disabled status preview commit"])
         status-buffer (create-buffer)
         previous-preview-on-focus regit-preview/regit-preview-on-focus]
     (delete-other-windows)
@@ -493,21 +493,21 @@
                 "Status preview buffer was created while regit-preview-on-focus was false")))))
       (finally
         (set! regit-preview/regit-preview-on-focus previous-preview-on-focus)
-        (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))))
+        (sh! "rm" ["-rf" tmp-dir])))))
 
 (deftest regit-status-apply-stash-test
   (let [tmp-dir (temp-file-path "regit-status-apply-stash-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "hello\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file file-path "hello modified\n")
-        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"])
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
@@ -528,21 +528,21 @@
                 (str "Status buffer missing test.txt after stash apply. Got: " text))
               (test/assert (str/includes? text "Unstaged changes")
                 (str "Status buffer missing Unstaged changes header after stash apply. Got: " text)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-apply-stash-refreshes-after-failure-test
   (let [tmp-dir (temp-file-path "regit-status-apply-stash-refreshes-after-failure-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "hello\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file file-path "hello modified\n")
-        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "test stale stash"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "test stale stash"])
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
@@ -553,7 +553,7 @@
           (let [lines (buffer-content-lines)
                 stash-line-idx (find-line-index lines #(str/includes? (str %) "test stale stash"))]
             (test/assert stash-line-idx "Could not find stale stash in status buffer")
-            (run-shell* "git" ["-C" tmp-dir "stash" "drop" "stash@{0}"] {:direnv false})
+            (sh! "git" ["-C" tmp-dir "stash" "drop" "stash@{0}"])
             (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
                            (buffer/line-to-char lock stash-line-idx))
               false status-window)
@@ -562,21 +562,21 @@
                          (buffer/slice lock 0 (buffer/len-chars lock)))]
               (test/assert (not (str/includes? text "test stale stash"))
                 (str "Status buffer was not refreshed after failed stash apply. Got: " text)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-discard-stash-requires-confirmation-test
   (let [tmp-dir (temp-file-path "regit-status-discard-stash-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "hello\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file file-path "hello modified\n")
-        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "drop me"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "drop me"])
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
@@ -615,13 +615,13 @@
                          (buffer/slice lock 0 (buffer/len-chars lock)))]
               (test/assert (not (str/includes? text "drop me"))
                 (str "Status buffer still included dropped stash. Got: " text)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-draw-all-for-library-buffer-test
   (let [tmp-dir (temp-file-path "regit-test-repo-draw")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "hello")
         status-buffer (create-buffer)]
@@ -647,13 +647,13 @@
               (test/assert (property-string? label) "regit-status label should preserve styled spans")
               (test/assert (str/includes? label "regit-status: ") "regit-status label missing prefix")
               (test/assert (str/includes? label (path-filename tmp-dir)) "regit-status label missing repo name"))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-show-commands-layout-test
   (let [tmp-dir (temp-file-path "regit-status-show-commands")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
@@ -707,25 +707,25 @@
             (let [close-cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "q"))]
               (when (ifn? close-cmd)
                 (close-cmd)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-branch-summary-test
   (let [tmp-dir (temp-file-path "regit-branch-summary-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "remote" "add" "origin" "https://example.invalid/rex.git"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
+        _ (sh! "git" ["-C" tmp-dir "remote" "add" "origin" "https://example.invalid/rex.git"])
         tracked (path-join tmp-dir "tracked.txt")
         subject "test runner output formatting and colors"
         _ (write-file tracked "hello\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" subject] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "branch" "-M" "main"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "update-ref" "refs/remotes/origin/main" "HEAD"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "branch" "--set-upstream-to" "origin/main" "main"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "pull.rebase" "true"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" subject])
+        _ (sh! "git" ["-C" tmp-dir "branch" "-M" "main"])
+        _ (sh! "git" ["-C" tmp-dir "update-ref" "refs/remotes/origin/main" "HEAD"])
+        _ (sh! "git" ["-C" tmp-dir "branch" "--set-upstream-to" "origin/main" "main"])
+        _ (sh! "git" ["-C" tmp-dir "config" "pull.rebase" "true"])
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
@@ -742,25 +742,25 @@
             (test/assert (not (str/includes? content "Branch:")) "did not expect old branch heading")
             (test/assert (and repository-idx head-idx (< repository-idx head-idx))
               "expected branch summary inside repository heading")))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-branch-summary-uses-merge-label-when-pull-rebase-is-not-true-test
   (let [tmp-dir (temp-file-path "regit-branch-summary-merge-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "remote" "add" "origin" "https://example.invalid/rex.git"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
+        _ (sh! "git" ["-C" tmp-dir "remote" "add" "origin" "https://example.invalid/rex.git"])
         tracked (path-join tmp-dir "tracked.txt")
         subject "test runner output formatting and colors"
         _ (write-file tracked "hello\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" subject] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "branch" "-M" "main"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "update-ref" "refs/remotes/origin/main" "HEAD"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "branch" "--set-upstream-to" "origin/main" "main"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "pull.rebase" "false"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" subject])
+        _ (sh! "git" ["-C" tmp-dir "branch" "-M" "main"])
+        _ (sh! "git" ["-C" tmp-dir "update-ref" "refs/remotes/origin/main" "HEAD"])
+        _ (sh! "git" ["-C" tmp-dir "branch" "--set-upstream-to" "origin/main" "main"])
+        _ (sh! "git" ["-C" tmp-dir "config" "pull.rebase" "false"])
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
@@ -771,28 +771,28 @@
           (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))]
             (test/assert (str/includes? content (str "Merge:       origin/main " subject)) "expected regit merge summary")
             (test/assert (not (str/includes? content "Rebase:")) "did not expect regit rebase summary")))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-enter-on-branch-summary-opens-log-target-test
   (let [tmp-dir (temp-file-path "regit-branch-summary-enter-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "remote" "add" "origin" "https://example.invalid/rex.git"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
+        _ (sh! "git" ["-C" tmp-dir "remote" "add" "origin" "https://example.invalid/rex.git"])
         tracked (path-join tmp-dir "tracked.txt")
         _ (write-file tracked "main\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "main commit"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "branch" "-M" "main"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "checkout" "-b" "remote-seed"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "main commit"])
+        _ (sh! "git" ["-C" tmp-dir "branch" "-M" "main"])
+        _ (sh! "git" ["-C" tmp-dir "checkout" "-b" "remote-seed"])
         _ (write-file tracked "remote\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "remote commit"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "update-ref" "refs/remotes/origin/main" "HEAD"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "checkout" "main"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "branch" "--set-upstream-to" "origin/main" "main"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "remote commit"])
+        _ (sh! "git" ["-C" tmp-dir "update-ref" "refs/remotes/origin/main" "HEAD"])
+        _ (sh! "git" ["-C" tmp-dir "checkout" "main"])
+        _ (sh! "git" ["-C" tmp-dir "branch" "--set-upstream-to" "origin/main" "main"])
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
@@ -817,20 +817,20 @@
                              (buffer/slice lock 0 (buffer/len-chars lock)))]
                   (test/assert (str/includes? text "Commits in origin/main") "regit-log missing target header")
                   (test/assert (str/includes? text "remote commit") "regit-log missing target commit"))))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-initially-hides-file-diffs-test
   (let [tmp-dir (temp-file-path "regit-hides-diffs-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         binary (path-join tmp-dir "image.png")
         _ (write-file tracked "before\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
         _ (write-file tracked "after\n")
         _ (write-file binary "fake png data")
         status-buffer (create-buffer)]
@@ -847,19 +847,19 @@
             (test/assert (str/includes? content "image.png") "expected untracked file path")
             (test/assert (not (str/includes? content "untracked image.png")) "expected untracked files to render without a status prefix")
             (test/assert (not (str/includes? content "+after")) "diff content should not be rendered initially")))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-stage-and-unstage-file-entry-test
   (let [tmp-dir (temp-file-path "regit-stage-unstage-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         _ (write-file tracked "before\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
         _ (write-file tracked "after\n")
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
@@ -885,7 +885,7 @@
                     unstaged-diff (get-git-output tmp-dir "diff" "--" "tracked.txt")]
                 (test/assert (str/blank? staged-diff) "expected staged diff to be empty")
                 (test/assert (str/includes? (str unstaged-diff) "+after") "expected unstaged diff to contain +after")))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-unstage-unresolved-conflict-from-staged-section-test
   (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-unstage")
@@ -910,7 +910,7 @@
               (test/assert (str/includes? content "Merging feature:") "status should still show merge in progress")
               (test/assert (str/includes? content "modified conflict.txt")
                 (str "status should rerender conflict as unstaged modified file. Got: " content)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-shows-special-merge-state-labels-test
   (doseq [case-data [[:deleted-by-them "UD conflict.txt" "deleted by them conflict.txt"]
@@ -934,7 +934,7 @@
                 (str "expected raw porcelain state " porcelain-fragment ". Got: " porcelain))
               (test/assert (str/includes? content label)
                 (str "expected status label " label ". Got: " content))))))
-      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
+      (sh! "rm" ["-rf" tmp-dir]))))
 
 (deftest regit-status-stage-and-unstage-resolved-conflict-file-test
   (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-stage")
@@ -964,7 +964,7 @@
                 (test/assert (str/blank? staged-diff) "unstage should clear staged resolution")
                 (test/assert (str/includes? (str unstaged-diff) "+resolved")
                   "unstage should leave resolved content in worktree")))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-conflict-hunk-stage-shows-magit-error-test
   (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-hunk-error")
@@ -1010,7 +1010,7 @@
                               (buffer/slice lock 0 (buffer/len-chars lock)))]
                 (test/assert (str/includes? content "Merging feature:")
                   "status should rerender after failed conflict hunk operation")))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-conflict-hunk-unstage-shows-magit-error-test
   (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-hunk-unstage-error")
@@ -1037,7 +1037,7 @@
                                  (buffer/slice lock 0 (buffer/len-chars lock)))]
                   (test/assert (str/includes? messages "Cannot un-/stage resolution hunks. Stage the whole file")
                     (str "expected Magit conflict hunk unstage error. Messages: " messages)))))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-discard-conflict-file-prompts-for-stage-test
   (let [tmp-dir (init-conflicted-merge-repo "regit-status-conflict-discard")
@@ -1076,7 +1076,7 @@
               (test/assert (str/includes? content "Merging feature:") "merge should remain in progress after checkout-stage")
               (test/assert (not (str/includes? content "both modified conflict.txt"))
                 (str "resolved conflict should be removed from conflict sections. Got: " content)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-discard-conflict-choice-updates-preview-test
   (let [tmp-dir (init-conflicted-merge-repo-with-content
@@ -1168,22 +1168,22 @@
                 (is= "shared before\ntheirs one\nshared middle\ntheirs two\nshared after\n" (read-file conflict-path))
                 (test/assert (str/blank? (unmerged-index tmp-dir))
                   "choosing their stage should resolve unmerged index")))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-discard-open-untracked-file-refreshes-status-test
   (let [tmp-dir (temp-file-path "regit-discard-open-untracked-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         untracked (path-join tmp-dir "scratch.txt")
         opened-buffer (atom nil)]
     (try
       (write-file tracked "tracked\n")
-      (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-      (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial commit"] {:direnv false})
+      (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+      (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
       (write-file untracked "scratch\n")
       (let [file-buffer (open-file untracked)]
         (reset! opened-buffer file-buffer)
@@ -1216,21 +1216,21 @@
           (try
             (kill-buffer buffer)
             (catch exception e nil)))
-        (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))))
+        (sh! "rm" ["-rf" tmp-dir])))))
 
 (deftest regit-status-stage-and-unstage-hunk-from-content-line-test
   (let [tmp-dir (temp-file-path "regit-stage-hunk-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         initial (str/join "\n" (map #(str "line-" %) (range 1 17)))
         updated (str/join "\n" (map #(cond (= % 2) (str "line-" % " staged") (= % 14) (str "line-" % " staged") :else (str "line-" %)) (range 1 17)))
         _ (write-file tracked (str initial "\n"))
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
         _ (write-file tracked (str updated "\n"))
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
@@ -1266,19 +1266,19 @@
                   (status/regit-unstage)
                   (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "tracked.txt")]
                     (test/assert (str/blank? staged-diff) "expected staged diff to be empty"))))))))
-      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
+      (sh! "rm" ["-rf" tmp-dir]))))
 
 (deftest regit-status-section-stage-requires-confirmation-test
   (let [tmp-dir (temp-file-path "regit-section-stage-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         _ (write-file tracked "before\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
         _ (write-file tracked "after\n")
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
@@ -1299,19 +1299,19 @@
                   (simple-prompt/simple-prompt-append-char "Y"))))
             (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "tracked.txt")]
               (test/assert (str/includes? (str staged-diff) "+after") "expected staged diff to contain +after"))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-discard-hunk-requires-confirmation-test
   (let [tmp-dir (temp-file-path "regit-discard-hunk-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         _ (write-file tracked "before\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
         _ (write-file tracked "after\n")
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
@@ -1347,22 +1347,22 @@
               (let [unstaged-diff (get-git-output tmp-dir "diff" "--" "tracked.txt")]
                 (test/assert (str/blank? unstaged-diff)
                   "expected unstaged diff to be empty because hunk was discarded")))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-navigation-test
   (let [tmp-dir (temp-file-path "regit-nav-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
 
         file1 (path-join tmp-dir "file1.txt")
         file2 (path-join tmp-dir "file2.txt")
         _ (write-file file1 "1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11\n12\n13\n14\n15\n")
         _ (write-file file2 "a\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk\nl\nm\nn\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "."] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "."])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
 
         _ (write-file file1 "1 modified\n2\n3\n4\n5\n6\n7\n8\n9\n10\n11 modified\n12\n13\n14\n15\n")
         _ (write-file file2 "a modified\nb\nc\nd\ne\nf\ng\nh\ni\nj\nk modified\nl\nm\nn\no\n")
@@ -1415,22 +1415,22 @@
                 (let [current (current-line status-buffer)
                       item (get (:line-to-item @(buffer-state status-buffer)) current)]
                   (test/assert item "Cursor lost item after staging last file"))))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-maintain-state-test
   (let [tmp-dir (temp-file-path "regit-state-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
 
         file1 (path-join tmp-dir "file1.txt")
         file2 (path-join tmp-dir "file2.txt")
         _ (write-file file1 "line1\nline2\nline3\n")
         _ (write-file file2 "a\nb\nc\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "."] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "."])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
 
         _ (write-file file1 "line1 modified\nline2\nline3 modified\n")
         _ (write-file file2 "a modified\nb\nc modified\n")
@@ -1477,17 +1477,17 @@
                     (let [lines (buffer-content-lines)]
                       (test/assert (not (some #(str/includes? (str %) "+a modified") lines))
                         "Discard failed to remove change"))))))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-hint-highlight-test
   (let [tmp-dir (temp-file-path "regit-hint-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
         _ (write-file (str tmp-dir "/file1.txt") "line1\nline2\n")
         _ (write-file (str tmp-dir "/file2.txt") "a\nb\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "file1.txt" "file2.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "file1.txt" "file2.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file (str tmp-dir "/file1.txt") "line1 modified\nline2\n")
         _ (write-file (str tmp-dir "/file2.txt") "a modified\nb\n")
         status-buffer (status/regit-status tmp-dir false)
@@ -1547,16 +1547,16 @@
             (let [s (first spans)]
               (test/assert (= file2-header-line (:start s)) "Leaf highlight should start on child line")
               (test/assert (= (inc file2-header-line) (:end s)) "Leaf highlight should be limited to child line"))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-diff-header-overlay-test
   (let [tmp-dir (temp-file-path "regit-diff-header-overlay-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
         _ (write-file (str tmp-dir "/file1.txt") "line1\nline2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "file1.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "file1.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file (str tmp-dir "/file1.txt") "line1 modified\nline2\n")
         status-buffer (status/regit-status tmp-dir false)
         status-window (first (buffer-windows status-buffer))]
@@ -1586,19 +1586,19 @@
                 (str "Full line overlay length should be 1 line. Got end: " (:end matching-span)))
               (test/assert (seq (keys (:properties matching-span)))
                 "Overlay properties should not be empty"))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-stage-hunk-updates-buffer-test
   (let [tmp-dir (temp-file-path "regit-update-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         _ (write-file tracked "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file tracked "line1 modified\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10 modified\n")
         status-buffer (status/regit-status tmp-dir)
         status-window (focused-window)]
@@ -1637,19 +1637,19 @@
                     staged-lines (subvec new-lines-expanded staged-start-exp staged-end-exp)
                     hunk-in-staged? (some #(str/includes? % "+line1 modified") staged-lines)]
                 (test/assert hunk-in-staged? (str "Staged hunk not found in staged section: " staged-lines)))))))
-      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
+      (sh! "rm" ["-rf" tmp-dir]))))
 
 (deftest regit-status-stage-only-hunk-removes-file-from-unstaged-test
   (let [tmp-dir (temp-file-path "regit-remove-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         _ (write-file tracked "line1\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file tracked "line1 modified\n")
         status-buffer (status/regit-status tmp-dir)
         status-window (focused-window)]
@@ -1666,19 +1666,19 @@
               unstaged-lines (if unstaged-start (subvec new-lines unstaged-start unstaged-end) [])]
           (test/assert (not (some #(str/includes? % "tracked.txt") unstaged-lines))
             (str "File STILL FOUND in unstaged section: " unstaged-lines)))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-new-file-node-is-folded-test
   (let [tmp-dir (temp-file-path "regit-folded-test-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         _ (write-file tracked "line1\nline2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file tracked "line1 modified\nline2\n")
         status-buffer (status/regit-status tmp-dir)
         status-window (focused-window)]
@@ -1719,22 +1719,22 @@
                 ;; Check if hunk is expanded (should see its content)
                 (let [hunk-content-idx (find-line-index-after expanded-lines (inc hunk-header-idx) #(str/includes? % "+line1 modified"))]
                   (test/assert hunk-content-idx (str "Hunk is FOLDED but should be EXPANDED. Buffer: " expanded-lines))))))))
-      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
+      (sh! "rm" ["-rf" tmp-dir]))))
 
 (defn- press-key [k]
   (frame/process-key-event (first (keys/parse-key-sequence k))))
 
 (deftest regit-status-repro-issue-test
   (let [tmp-dir (temp-file-path "regit-repro-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         _ (write-file tracked "line1\nline2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file tracked "line1 modified\nline2\n")
         status-buffer (status/regit-status tmp-dir)
         status-window (focused-window)]
@@ -1796,19 +1796,19 @@
                     (test/assert hunk-header-idx (str "Hunk header not found after expanding final staged file. Buffer: " final-expanded-lines))
                     (let [hunk-content-idx (find-line-index-after final-expanded-lines (inc hunk-header-idx) #(str/includes? % "+line1 modified"))]
                       (test/assert hunk-content-idx (str "Hunk is FOLDED in final staged file but should be EXPANDED. Buffer: " final-expanded-lines)))))))))
-        (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))))
+        (sh! "rm" ["-rf" tmp-dir])))))
 
 (deftest regit-status-hunk-initially-expanded-test
   (let [tmp-dir (temp-file-path "regit-hunk-exp-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
         _ (write-file tracked "line1\nline2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "tracked.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file tracked "line1 modified\nline2\n")
         status-buffer (status/regit-status tmp-dir)
         status-window (focused-window)]
@@ -1846,19 +1846,19 @@
                   h1-staged-content (find-line-index-after lines3 staged-f-line #(str/includes? % "+line1 modified"))]
               ;; 5. The hunk inside should be EXPANDED (visible).
               (test/assert h1-staged-content (str "Hunk content should be visible after expanding newly staged file. Buffer: " lines3)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-status-shows-more-than-two-files-test
   (let [tmp-dir (temp-file-path "regit-many-files-repo")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         _ (dotimes [i 5]
             (write-file (path-join tmp-dir (str "tracked-" i ".txt")) "initial\n"))
-        _ (run-shell* "git" ["-C" tmp-dir "add" "."] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "."])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (dotimes [i 5]
             (write-file (path-join tmp-dir (str "tracked-" i ".txt")) "modified\n")
             (write-file (path-join tmp-dir (str "untracked-" i ".txt")) "new\n"))
@@ -1875,4 +1875,4 @@
             (dotimes [i 5]
               (test/assert (str/includes? content (str "tracked-" i ".txt")) (str "Missing tracked-" i ".txt in content"))
               (test/assert (str/includes? content (str "untracked-" i ".txt")) (str "Missing untracked-" i ".txt in content")))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))

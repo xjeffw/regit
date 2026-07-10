@@ -1,6 +1,6 @@
 (ns regit.tests.diff
   (:require [regit.diff :as diff]
-            [regit.tests.util :refer [buffer-content find-line git! git-output move-to-line]]
+            [regit.tests.util :refer [buffer-content find-line git! git-output move-to-line sh!]]
             [rex.string :as str]
             [rex.test :as test :refer [deftest is= is-error]]
             [rex.base.buffer :as buffer]
@@ -36,8 +36,8 @@
 (defn- repo-with-change [name]
   (let [root (temp-file-path name)
         file-path (path-join root "test.txt")]
-    (run-shell* "rm" ["-rf" root] {:direnv false})
-    (run-shell* "mkdir" [root] {:direnv false})
+    (sh! "rm" ["-rf" root])
+    (sh! "mkdir" [root])
     (git! root "init")
     (git! root "config" "user.name" "Rex Test")
     (git! root "config" "user.email" "rex@example.com")
@@ -132,7 +132,7 @@
           (is= "modified test.txt" (diff-context-row-text content-row))
           (is= "" (diff-context-row-text file-row))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-status-diff-context-decoration-renders-expanded-hunk-test
   (let [root (repo-with-change "regit-status-diff-context-decoration-test")]
@@ -165,7 +165,7 @@
           (is= "modified test.txt"
             (diff-context-row-text (diff-context-row-at-line buffer content-line)))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-view-commit-diff-context-decoration-renders-hunk-file-header-test
   (let [root (repo-with-committed-change "regit-view-commit-diff-context-decoration-test")]
@@ -183,7 +183,7 @@
               "modified test.txt"
               "+line 1 changed"))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-view-stash-diff-context-decoration-renders-hunk-file-header-test
   (let [root (repo-with-stash "regit-view-stash-diff-context-decoration-test")]
@@ -200,4 +200,4 @@
               "modified test.txt"
               "+line 1 changed"))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))

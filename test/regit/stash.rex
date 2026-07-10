@@ -19,6 +19,7 @@
                                       invoke-focused!
                                       move-focused-line!
                                       move-focused-line-containing!
+                                      sh!
                                       submit-simple-prompt!]]
             [rex.base.buffer :as buffer]
             [rex.base.keys :as keys]
@@ -32,8 +33,8 @@
 
 (defn- init-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.name" "Rex Test")
         _ (git! tmp-dir "config" "user.email" "rex@example.com")

@@ -15,7 +15,8 @@
                                       invoke-status-key!
                                       move-focused-line!
                                       move-focused-line-containing!
-                                      select-current-iselect-entry!]]
+                                      select-current-iselect-entry!
+                                      sh!]]
             [regit.command :as regit-command]
             [rex.ui.iselect :as iselect]
             [rex.base.buffer :as buffer]
@@ -25,8 +26,8 @@
 
 (defn- init-reset-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")

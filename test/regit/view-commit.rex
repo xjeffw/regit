@@ -6,7 +6,8 @@
                                       git!
                                       git-cmd
                                       git-output
-                                      move-to-line]]
+                                      move-to-line
+                                      sh!]]
             [regit.view-commit :as view-commit]
             [rex.base.buffer :as buffer]
             [rex.base.frame :as frame]
@@ -20,8 +21,8 @@
 (defn- repo-with-middle-line-commit [name]
   (let [root (temp-file-path name)
         file-path (path-join root "test.txt")]
-    (run-shell* "rm" ["-rf" root] {:direnv false})
-    (run-shell* "mkdir" [root] {:direnv false})
+    (sh! "rm" ["-rf" root])
+    (sh! "mkdir" [root])
     (git! root "init")
     (git! root "config" "user.name" "Rex Test")
     (git! root "config" "user.email" "rex@example.com")
@@ -44,17 +45,17 @@
 (after! [regit.status :as regit-status]
   (deftest regit-view-commit-from-status-test
     (let [tmp-dir (temp-file-path "regit-view-commit-from-status-test")
-          _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-          _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-          _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-          _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-          _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+          _ (sh! "rm" ["-rf" tmp-dir])
+          _ (sh! "mkdir" [tmp-dir])
+          _ (sh! "git" ["-C" tmp-dir "init"])
+          _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+          _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
           _ (write-file (path-join tmp-dir "f.txt") "1")
-          _ (run-shell* "git" ["-C" tmp-dir "add" "f.txt"] {:direnv false})
-          _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "c1"] {:direnv false})
+          _ (sh! "git" ["-C" tmp-dir "add" "f.txt"])
+          _ (sh! "git" ["-C" tmp-dir "commit" "-m" "c1"])
           _ (write-file (path-join tmp-dir "f.txt") "2")
-          _ (run-shell* "git" ["-C" tmp-dir "add" "f.txt"] {:direnv false})
-          _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "c2"] {:direnv false})]
+          _ (sh! "git" ["-C" tmp-dir "add" "f.txt"])
+          _ (sh! "git" ["-C" tmp-dir "commit" "-m" "c2"])]
       (delete-other-windows)
       (regit-status/regit-status tmp-dir)
       (let [status-window (focused-window)
@@ -106,22 +107,22 @@
                             (test/assert (str/index-of text summary) "view-commit buffer missing commit summary"))
                           (when-let [author (:author info)]
                             (test/assert (str/index-of text author) "view-commit buffer missing commit author"))))))))))))
-      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
+      (sh! "rm" ["-rf" tmp-dir]))))
 
 (deftest regit-view-commit-jump-to-file-test
   (let [tmp-dir (temp-file-path "regit-view-commit-jump-to-file-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "line1\nline2\nline3\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
         _ (write-file file-path "line1\nline2 modified\nline3\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "second commit"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "second commit"])
         root tmp-dir
         recent-commits (git-recent-commits root 1)
         commit (first recent-commits)
@@ -150,7 +151,7 @@
               (view-commit/regit-view-commit-enter)
               (let [new-buffer (window-buffer view-window)]
                 (is= (path-canonicalize (path-join root path)) (path-canonicalize (:file new-buffer))))))))
-      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
+      (sh! "rm" ["-rf" tmp-dir]))))
 
 (deftest regit-view-commit-enter-on-added-hunk-line-jumps-to-commit-line-test
   (let [root (repo-with-middle-line-commit "regit-view-commit-enter-added-line")
@@ -171,7 +172,7 @@
               (test/assert (str/includes? (:name target-buffer) "*commit[")
                 (str "expected commit synthetic buffer, got " (:name target-buffer)))))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-view-commit-enter-on-removed-hunk-line-jumps-to-parent-line-test
   (let [root (repo-with-middle-line-commit "regit-view-commit-enter-removed-line")]
@@ -191,7 +192,7 @@
               (test/assert (str/includes? (:name target-buffer) "^]: test.txt*")
                 (str "expected parent synthetic buffer, got " (:name target-buffer)))))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-view-commit-jump-to-file-on-added-hunk-line-jumps-to-working-line-test
   (let [root (repo-with-middle-line-commit "regit-view-commit-jump-file-added-line")
@@ -210,4 +211,4 @@
             (view-commit/regit-view-commit-jump-to-file)
             (assert-focused-file-line file-path 1 "line 2 changed"))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))

@@ -10,8 +10,11 @@
             [rex.ui.iselect :as iselect]
             [rex.ui.simple-prompt :as simple-prompt]))
 
+(defn sh! [command args]
+  (run-shell* command args {:direnv false}))
+
 (defn git [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args) {:direnv false}))
+  (sh! "git" (into ["-C" (str root)] args)))
 
 (defn git-cmd [root & args]
   (apply git root args))
@@ -40,8 +43,8 @@
 
 (defn init-test-repo [name]
   (let [root (temp-file-path name)]
-    (run-shell* "rm" ["-rf" root] {:direnv false})
-    (run-shell* "mkdir" [root] {:direnv false})
+    (sh! "rm" ["-rf" root])
+    (sh! "mkdir" [root])
     (git! root "init")
     (git! root "config" "user.email" "test@example.com")
     (git! root "config" "user.name" "Test User")
@@ -52,8 +55,8 @@
 (defn repo-with-middle-line-change [name]
   (let [root (temp-file-path name)
         file-path (path-join root "test.txt")]
-    (run-shell* "rm" ["-rf" root] {:direnv false})
-    (run-shell* "mkdir" [root] {:direnv false})
+    (sh! "rm" ["-rf" root])
+    (sh! "mkdir" [root])
     (git! root "init")
     (git! root "config" "user.name" "Rex Test")
     (git! root "config" "user.email" "rex@example.com")
@@ -66,7 +69,7 @@
 (defn cleanup [& paths]
   (doseq [path paths]
     (when path
-      (run-shell* "rm" ["-rf" path] {:direnv false}))))
+      (sh! "rm" ["-rf" path]))))
 
 (defn current-branch [root]
   (git-out root "rev-parse" "--abbrev-ref" "HEAD"))

@@ -14,6 +14,7 @@
                                       invoke-command-key!
                                       select-current-iselect-entry!
                                       set-iselect-input!
+                                      sh!
                                       submit-simple-prompt!]]
             [rex.base.keys :as keys]
             [rex.base.buffer :as buffer]
@@ -37,8 +38,8 @@
 
 (defn- init-master-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")
@@ -48,9 +49,9 @@
 
 (defn- init-bare-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        result (run-shell* "git" ["init" "--bare" tmp-dir] {:direnv false})]
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        result (sh! "git" ["init" "--bare" tmp-dir])]
     (test/assert (zero? (:code result))
       (str "git init --bare failed: " (:err result) (:out result)))
     tmp-dir))
@@ -181,10 +182,10 @@
     (git! tmp-dir "push" "-u" "origin" "master")
     (git! tmp-dir "remote" "set-head" "origin" "master")
     (let [head (git-out tmp-dir "rev-parse" "HEAD")]
-      (let [result (run-shell* "git" ["--git-dir" bare-dir "update-ref" "refs/heads/main" head] {:direnv false})]
+      (let [result (sh! "git" ["--git-dir" bare-dir "update-ref" "refs/heads/main" head])]
         (test/assert (zero? (:code result))
           (str "bare update-ref failed: " (:err result) (:out result))))
-      (let [result (run-shell* "git" ["--git-dir" bare-dir "symbolic-ref" "HEAD" "refs/heads/main"] {:direnv false})]
+      (let [result (sh! "git" ["--git-dir" bare-dir "symbolic-ref" "HEAD" "refs/heads/main"])]
         (test/assert (zero? (:code result))
           (str "bare symbolic-ref failed: " (:err result) (:out result)))))
     (remote/update-default-branch! tmp-dir (focused-window))

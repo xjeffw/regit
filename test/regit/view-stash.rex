@@ -6,7 +6,8 @@
                                       git!
                                       git-cmd
                                       move-to-line
-                                      repo-with-middle-line-change]]
+                                      repo-with-middle-line-change
+                                      sh!]]
             [regit.view-stash :as view-stash]
             [rex.base.buffer :as buffer]
             [rex.base.keys :as keys]
@@ -23,21 +24,21 @@
 
 (deftest regit-view-stash-shows-separate-summaries-test
   (let [tmp-dir (temp-file-path "regit-view-stash-shows-separate-summaries-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         staged-path (path-join tmp-dir "index.txt")
         unstaged-path (path-join tmp-dir "worktree.txt")
         _ (write-file staged-path "keep\nremove\n")
         _ (write-file unstaged-path "keep\nremove\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "index.txt" "worktree.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "index.txt" "worktree.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file staged-path "keep\nstaged\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "index.txt"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "index.txt"])
         _ (write-file unstaged-path "keep\nunstaged\n")
-        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "summary stash"] {:direnv false})]
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "summary stash"])]
     (delete-other-windows)
     (let [buf (create-buffer)]
       (swap! (buffer-state buf) assoc :regit-root tmp-dir)
@@ -63,21 +64,21 @@
                 (str "regit-view-stash buffer missing unstaged summary. Got: " text))
               (test/assert (str/includes? text "worktree.txt | 2 +-")
                 (str "regit-view-stash buffer missing unstaged per-file summary. Got: " text)))))))
-    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
+    (sh! "rm" ["-rf" tmp-dir])))
 
 (deftest regit-view-stash-apply-test
   (let [tmp-dir (temp-file-path "regit-view-stash-apply-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
+        _ (sh! "git" ["-C" tmp-dir "init"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
+        _ (sh! "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "line 1\nline 2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
+        _ (sh! "git" ["-C" tmp-dir "commit" "-m" "initial"])
         _ (write-file file-path "line 1 modified\nline 2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"] {:direnv false})
+        _ (sh! "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"])
         _ (write-file file-path "line 1\nline 2\n")]
     (let [status-buffer (create-buffer)]
       (binding [*buffer* status-buffer]
@@ -117,7 +118,7 @@
                           (str "Status buffer missing test.txt. Got: " status-text))
                         (test/assert (str/includes? status-text "Unstaged changes")
                           (str "Status buffer missing Unstaged changes. Got: " status-text)))))))))))
-      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
+      (sh! "rm" ["-rf" tmp-dir]))))
 
 (deftest regit-view-stash-enter-on-added-hunk-line-jumps-to-stash-line-test
   (let [root (repo-with-middle-line-change "regit-view-stash-enter-added-line")]
@@ -137,7 +138,7 @@
               (test/assert (str/includes? (:name target-buffer) "*stash[stash@{0}]: test.txt*")
                 (str "expected stash synthetic buffer, got " (:name target-buffer)))))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-view-stash-enter-on-removed-hunk-line-jumps-to-stash-index-line-test
   (let [root (repo-with-middle-line-change "regit-view-stash-enter-removed-line")]
@@ -157,7 +158,7 @@
               (test/assert (str/includes? (:name target-buffer) "*stash[stash@{0}^2]: test.txt*")
                 (str "expected stash index synthetic buffer, got " (:name target-buffer)))))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))
 
 (deftest regit-view-stash-jump-to-file-on-added-hunk-line-jumps-to-working-line-test
   (let [root (repo-with-middle-line-change "regit-view-stash-jump-file-added-line")
@@ -176,4 +177,4 @@
             (view-stash/regit-view-stash-jump-to-file)
             (assert-focused-file-line file-path 1 "line 2"))))
       (finally
-        (run-shell* "rm" ["-rf" root] {:direnv false})))))
+        (sh! "rm" ["-rf" root])))))

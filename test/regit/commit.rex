@@ -13,6 +13,7 @@
                                       head-subject
                                       minibuffer-ui-content
                                       send-keys
+                                      sh!
                                       wait-for-message]]
             [rex.base.buffer :as buffer]
             [rex.base.frame :as frame]
@@ -22,8 +23,8 @@
 
 (defn- init-commit-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
-        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (sh! "rm" ["-rf" tmp-dir])
+        _ (sh! "mkdir" [tmp-dir])
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.name" "Rex Test")
         _ (git! tmp-dir "config" "user.email" "rex@example.com")
