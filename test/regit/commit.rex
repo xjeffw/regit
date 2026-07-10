@@ -1,28 +1,29 @@
 (ns regit.tests.commit
   (:require [regit.commit :as commit]
             [regit.status :as status]
+            [regit.tests.util :refer [assert-focused-command
+                                      assert-focused-commit-comments-dimmed
+                                      assert-focused-status
+                                      buffer-content
+                                      cleanup
+                                      focused-buffer
+                                      focused-buffer-name
+                                      focused-content
+                                      git!
+                                      head-subject
+                                      minibuffer-ui-content
+                                      send-keys
+                                      wait-for-message]]
             [rex.base.buffer :as buffer]
             [rex.base.frame :as frame]
             [rex.base.keys :as keys]
             [rex.string :as str]
             [rex.test :as test :refer [deftest is= is-error]]))
 
-(defn- git [root & args]
-  (run-shell* "git" (into ["-C" root] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result) (:out result)))
-    result))
-
-(defn- git-out [root & args]
-  (str/trim (:out (apply git! root args))))
-
 (defn- init-commit-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.name" "Rex Test")
         _ (git! tmp-dir "config" "user.email" "rex@example.com")
@@ -35,58 +36,6 @@
 (defn- stage-file! [root file content]
   (write-file (path-join root file) content)
   (git! root "add" file))
-
-(defn- cleanup [root]
-  (run-shell* "rm" ["-rf" root]))
-
-(defn- head-subject [root]
-  (git-out root "log" "-1" "--pretty=%s"))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- focused-buffer []
-  (window-buffer (focused-window)))
-
-(defn- focused-buffer-name []
-  (:name (focused-buffer)))
-
-(defn- focused-content []
-  (buffer-content (focused-buffer)))
-
-(defn- minibuffer-ui-content []
-  (buffer-content (window-buffer (minibuffer-ui-window))))
-
-(defn- messages-content []
-  (buffer-content (buffer/get-buffer "*Messages*")))
-
-(defn- send-keys [keys-str]
-  (let [frame-id (:id *frame*)]
-    (frame/set-pending-sequence! frame-id [])
-    (frame/set-numeric-prefix! frame-id nil))
-  (doseq [keyspec (keys/parse-key-sequence keys-str)]
-    (let [win (focused-window)]
-      (binding [*buffer* (window-buffer win)
-                *frame* (window-frame win)]
-        (frame/process-key-event keyspec)))))
-
-(defn- wait-for-message [needle context]
-  (test/wait-for [content (messages-content)]
-    :until (str/includes? content needle)
-    :timeout-message (fn [] (str context ": expected message " needle ", got " (messages-content)))))
-
-(defn- assert-focused-status [root context]
-  (test/assert (= (status/find-status-buffer root) (focused-buffer))
-    (str context ": expected focused regit-status buffer, got " (focused-buffer-name)))
-  (test/assert (str/includes? (focused-content) "Repository:")
-    (str context ": missing status repository heading")))
-
-(defn- assert-focused-command [needle context]
-  (test/assert (= (minibuffer-ui-window) (focused-window))
-    (str context ": expected minibuffer UI focus, got " (focused-buffer-name)))
-  (test/assert (str/includes? (minibuffer-ui-content) needle)
-    (str context ": missing command text " needle)))
 
 (defn- open-status-commit-action! [root key context]
   (status/regit-status root)
@@ -109,15 +58,6 @@
     (test/assert (:regit-commit-message-path state)
       (str context ": missing git commit message file path"))
     buf))
-
-(defn- assert-focused-commit-comments-dimmed [context]
-  (let [content (focused-content)
-        comment-pos (str/index-of content "#")]
-    (test/assert comment-pos
-      (str context ": expected git comments in commit message buffer. Got:\n" content))
-    (binding [*buffer* (focused-buffer)]
-      (test/assert (not (empty? (buffer/property-at comment-pos)))
-        (str context ": expected comment text to have face properties")))))
 
 (defn- find-staged-diff-window [exclude-window]
   (some (fn [w]

@@ -1,6 +1,30 @@
 (ns regit.tests.rebase
   (:require [regit.rebase :as rebase]
             [regit.status :as status]
+            [regit.tests.util :refer [assert-focused-command
+                                      assert-focused-commit-comments-dimmed
+                                      assert-focused-regit-commit
+                                      assert-focused-status
+                                      buffer-content
+                                      buffer-display-content
+                                      cleanup
+                                      commit-file!
+                                      find-line
+                                      focused-buffer
+                                      focused-buffer-name
+                                      focused-content
+                                      focused-display-content
+                                      git
+                                      git!
+                                      git-out
+                                      messages-content
+                                      minibuffer-ui-content
+                                      move-focused-line!
+                                      move-focused-line-containing!
+                                      send-keys
+                                      status-content
+                                      wait-for-focused-status
+                                      wait-for-message]]
             [regit.command :as regit-command]
             [rex.base.buffer :as buffer]
             [rex.base.frame :as frame]
@@ -21,27 +45,10 @@
    :interactive false
    :no-verify false})
 
-(defn- git [root & args]
-  (run-shell* "git" (into ["-C" root] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result) (:out result)))
-    result))
-
-(defn- git-out [root & args]
-  (str/trim (:out (apply git! root args))))
-
-(defn- commit-file! [root file content subject]
-  (write-file (path-join root file) content)
-  (git! root "add" file)
-  (git! root "commit" "-m" subject))
-
 (defn- init-rebase-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")
@@ -62,8 +69,8 @@
 
 (defn- init-conflicted-rebase-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")
@@ -79,49 +86,11 @@
     (test/assert (rebase/rebase-in-progress? tmp-dir) "rebase should be in progress after conflict")
     tmp-dir))
 
-(defn- cleanup [root]
-  (run-shell* "rm" ["-rf" root]))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- plain-text [value]
-  (str/strip-properties (or value "")))
-
 (defn- subject-hash [root subject]
   (git-out root "log" "--format=%H" "--grep" (str "^" subject "$") "-n" "1"))
 
 (defn- log-subjects [root]
   (str/split-lines (git-out root "log" "--format=%s")))
-
-(defn- focused-content []
-  (buffer-content (window-buffer (focused-window))))
-
-(declare focused-buffer)
-
-(defn- buffer-display-content [buf]
-  (plain-text (buffer-content buf)))
-
-(defn- focused-display-content []
-  (buffer-display-content (focused-buffer)))
-
-(defn- find-line [content needle]
-  (first (remove nil?
-           (map-indexed (fn [idx line]
-                          (when (str/includes? line needle)
-                            idx))
-             (str/split-lines content)))))
-
-(defn- send-keys [keys-str]
-  (let [frame-id (:id *frame*)]
-    (frame/set-pending-sequence! frame-id [])
-    (frame/set-numeric-prefix! frame-id nil))
-  (doseq [keyspec (keys/parse-key-sequence keys-str)]
-    (let [win (focused-window)]
-      (binding [*buffer* (window-buffer win)
-                *frame* (window-frame win)]
-        (frame/process-key-event keyspec)))))
 
 (defn- send-keys-queued [keys-str]
   (let [frame-id (:id *frame*)]
@@ -138,15 +107,6 @@
   (or (last (str/split-lines (buffer-content (buffer/get-buffer "*Messages*"))))
     ""))
 
-(defn- messages-content []
-  (buffer-content (buffer/get-buffer "*Messages*")))
-
-(defn- focused-buffer []
-  (window-buffer (focused-window)))
-
-(defn- focused-buffer-name []
-  (:name (focused-buffer)))
-
 (defn- focused-todo-lines []
   (str/split-lines (focused-display-content)))
 
@@ -158,64 +118,6 @@
 
 (defn- focused-todo-line-at [line]
   (nth (focused-todo-lines) line ""))
-
-(defn- move-focused-line! [line]
-  (let [win (focused-window)
-        buf (window-buffer win)]
-    (move-cursor (with-read-lock [lock (buffer-text buf)]
-                   (buffer/line-to-char lock line))
-      false win)))
-
-(defn- move-focused-line-containing! [needle]
-  (let [line (find-line (focused-display-content) needle)]
-    (test/assert line (str "Could not find line containing " needle " in:\n" (focused-display-content)))
-    (move-focused-line! line)
-    line))
-
-(defn- minibuffer-ui-content []
-  (buffer-content (window-buffer (minibuffer-ui-window))))
-
-(defn- status-content [root]
-  (buffer-content (status/find-status-buffer root)))
-
-(defn- assert-focused-status [root context]
-  (test/assert (= (status/find-status-buffer root) (focused-buffer))
-    (str context ": expected focused regit-status buffer, got " (focused-buffer-name)))
-  (let [content (focused-content)]
-    (test/assert (str/includes? content "Repository:") (str context ": missing status repository heading"))
-    (test/assert (str/includes? content "Recent commits") (str context ": missing status recent commits"))))
-
-(defn- wait-for-focused-status [root context]
-  (test/wait-for [buf (focused-buffer)]
-    :until (= (status/find-status-buffer root) buf)
-    :timeout-message (fn [] (str context ": expected focused regit-status buffer, got " (focused-buffer-name)))
-    :return (assert-focused-status root context)))
-
-(defn- wait-for-message [needle context]
-  (test/wait-for [content (messages-content)]
-    :until (str/includes? content needle)
-    :timeout-message (fn [] (str context ": expected message " needle ", got " (messages-content)))))
-
-(defn- assert-focused-regit-commit [context]
-  (test/assert (str/includes? (focused-buffer-name) "regit-commit-message")
-    (str context ": expected regit commit message buffer, got " (focused-buffer-name)))
-  (binding [*buffer* (focused-buffer)]
-    (is= :regit-commit-message *mode*)))
-
-(defn- assert-focused-commit-message-comments-dimmed [context]
-  (let [content (focused-content)
-        comment-pos (str/index-of content "#")]
-    (test/assert comment-pos
-      (str context ": expected commit message buffer to contain git comments. Got:\n" content))
-    (binding [*buffer* (focused-buffer)]
-      (test/assert (not (empty? (buffer/property-at comment-pos)))
-        (str context ": expected comment text to have face properties")))))
-
-(defn- assert-focused-command [needle context]
-  (test/assert (= (minibuffer-ui-window) (focused-window))
-    (str context ": expected minibuffer UI focus, got " (focused-buffer-name)))
-  (test/assert (str/includes? (minibuffer-ui-content) needle)
-    (str context ": missing command text " needle)))
 
 (defn- assert-focused-log-select [needle context]
   (test/assert (str/includes? (focused-content) needle)
@@ -268,7 +170,8 @@
       (send-keys "<enter>"))))
 
 (deftest run-shell-star-options-env-test
-  (let [result (run-shell* "sh" ["-c" "printf %s \"$REGIT_ENV_TEST\""] {:env {"REGIT_ENV_TEST" "ok"}})]
+  (let [result (run-shell* "sh" ["-c" "printf %s \"$REGIT_ENV_TEST\""]
+                 {:direnv false :env {"REGIT_ENV_TEST" "ok"}})]
     (is= 0 (:code result))
     (is= "ok" (:out result))))
 
@@ -612,7 +515,7 @@
       (str "continue rebase editor should use regular commit message buffer label, got " (focused-buffer-name)))
     (test/assert (str/includes? (focused-content) "feature conflict")
       (str "rebase editor should contain original commit message. Got:\n" (focused-content)))
-    (assert-focused-commit-message-comments-dimmed "continue rebase editor")
+    (assert-focused-commit-comments-dimmed "continue rebase editor")
     (set-string "resolved rebase message\n" (focused-buffer))
     (send-keys "C-c C-c")
     (test/wait-for [state {:rebasing? (rebase/rebase-in-progress? tmp-dir)

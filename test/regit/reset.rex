@@ -2,6 +2,20 @@
   (:require [regit.reset :as reset]
             [regit.status :as status]
             [regit.log :as log]
+            [regit.tests.util :refer [buffer-content
+                                      cleanup
+                                      command-for
+                                      commit-file!
+                                      find-line
+                                      focused-buffer
+                                      focused-display-content
+                                      git
+                                      git!
+                                      git-out
+                                      invoke-status-key!
+                                      move-focused-line!
+                                      move-focused-line-containing!
+                                      select-current-iselect-entry!]]
             [regit.command :as regit-command]
             [rex.ui.iselect :as iselect]
             [rex.base.buffer :as buffer]
@@ -9,27 +23,10 @@
             [rex.string :as str]
             [rex.test :as test :refer [deftest is=]]))
 
-(defn- git [root & args]
-  (run-shell* "git" (into ["-C" root] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result) (:out result)))
-    result))
-
-(defn- git-out [root & args]
-  (str/trim (:out (apply git! root args))))
-
-(defn- commit-file! [root file content subject]
-  (write-file (path-join root file) content)
-  (git! root "add" file)
-  (git! root "commit" "-m" subject))
-
 (defn- init-reset-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")
@@ -42,63 +39,11 @@
         _ (git! tmp-dir "tag" "v-test" "HEAD~1")]
     tmp-dir))
 
-(defn- cleanup [root]
-  (run-shell* "rm" ["-rf" root]))
-
 (defn- short-hash [root rev]
   (git-out root "rev-parse" "--short" rev))
 
 (defn- current-head [root]
   (short-hash root "HEAD"))
-
-(defn- focused-buffer []
-  (window-buffer (focused-window)))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- focused-display-content []
-  (str/strip-properties (buffer-content (focused-buffer))))
-
-(defn- find-line [content needle]
-  (first (remove nil?
-           (map-indexed (fn [idx line]
-                          (when (str/includes? line needle)
-                            idx))
-             (str/split-lines content)))))
-
-(defn- move-focused-line! [line]
-  (let [win (focused-window)
-        buf (window-buffer win)]
-    (move-cursor (with-read-lock [lock (buffer-text buf)]
-                   (buffer/line-to-char lock line))
-      false win)))
-
-(defn- move-focused-line-containing! [needle]
-  (let [line (find-line (focused-display-content) needle)]
-    (test/assert line (str "Could not find line containing " needle " in:\n" (focused-display-content)))
-    (move-focused-line! line)
-    line))
-
-(defn- command-for [key]
-  (let [ui-win (minibuffer-ui-window)]
-    (test/assert ui-win "regit command UI not open")
-    (let [ui-buf (window-buffer ui-win)
-          cmd (binding [*buffer* ui-buf]
-                (regit-command/regit-command-keymap (keys/parse-key-sequence key)))]
-      (when cmd
-        (fn []
-          (binding [*buffer* ui-buf]
-            (cmd)))))))
-
-(defn- invoke-status-key! [key]
-  (let [win (focused-window)
-        buf (window-buffer win)
-        cmd (keys/lookup-keymap status/regit-status-keymap (keys/parse-key-sequence key))]
-    (test/assert (ifn? cmd) (str "missing regit-status key " key))
-    (binding [*buffer* buf]
-      (cmd))))
 
 (defn- invoke-log-key! [key]
   (let [win (focused-window)
@@ -112,12 +57,6 @@
   (let [cmd (command-for key)]
     (test/assert (ifn? cmd) (str "missing regit reset action " key))
     (cmd)))
-
-(defn- select-current-iselect-entry! []
-  (let [mb-win (minibuffer-window)]
-    (test/assert mb-win "iselect minibuffer not opened")
-    (binding [*buffer* (window-buffer mb-win)]
-      (iselect/select-current-entry))))
 
 (defn- assert-reset-iselect-default [expected-hash]
   (let [mb-win (minibuffer-window)

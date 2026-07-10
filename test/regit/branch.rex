@@ -1,6 +1,29 @@
 (ns regit.tests.branch
   (:require [regit.branch :as branch]
             [regit.status :as status]
+            [regit.tests.util :as util
+             :refer [assert-command-contains
+                     branch-present?
+                     buffer-content
+                     cleanup
+                     close-command!
+                     commit-file!
+                     command-buffer
+                     command-state
+                     command-text
+                     focused-buffer
+                     git
+                     git!
+                     git-config
+                     git-out
+                     init-test-repo
+                     invoke-command-key!
+                     invoke-iselect-key!
+                     invoke-status-key!
+                     iselect-state
+                     select-current-iselect-entry!
+                     set-iselect-input!
+                     submit-simple-prompt!]]
             [rex.base.keys :as keys]
             [rex.base.buffer :as buffer]
             [rex.base.theme :as theme]
@@ -10,180 +33,28 @@
             [rex.string :as str]
             [rex.test :as test :refer [deftest is=]]))
 
-(defn- git [root & args]
-  (run-shell* "git" (into ["-C" root] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result) (:out result)))
-    result))
-
-(defn- git-out [root & args]
-  (str/trim (:out (apply git! root args))))
-
-(defn- git-config [root key]
-  (let [{:keys [code out]} (git root "config" "--get" key)]
-    (when (zero? code)
-      (str/trim out))))
-
 (defn- git-local-config [root key]
   (let [{:keys [code out]} (git root "config" "--local" "--get" key)]
     (when (zero? code)
       (str/trim out))))
 
-(defn- commit-file! [root file content subject]
-  (write-file (path-join root file) content)
-  (git! root "add" file)
-  (git! root "commit" "-m" subject))
-
-(defn- init-test-repo [name]
-  (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
-        _ (git! tmp-dir "init")
-        _ (git! tmp-dir "config" "user.email" "test@example.com")
-        _ (git! tmp-dir "config" "user.name" "Test User")
-        _ (commit-file! tmp-dir "test.txt" "hello\n" "initial")
-        _ (git! tmp-dir "branch" "-M" "main")]
-    tmp-dir))
-
-(defn- cleanup [& paths]
-  (doseq [path paths]
-    (when path
-      (run-shell* "rm" ["-rf" path]))))
-
-(defn- branch-present? [root name]
-  (let [{:keys [code]} (git root "show-ref" "--verify" "--quiet" (str "refs/heads/" name))]
-    (zero? code)))
-
 (defn- branch-rev [root branch]
   (git-out root "rev-parse" branch))
 
-(defn- focused-buffer []
-  (window-buffer (focused-window)))
-
-(defn- command-buffer []
-  (let [ui-win (minibuffer-ui-window)]
-    (test/assert ui-win "regit command UI not open")
-    (window-buffer ui-win)))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- command-text []
-  (str/strip-properties (buffer-content (command-buffer))))
-
-(defn- command-state []
-  (let [ui-buf (command-buffer)]
-    (binding [*buffer* ui-buf]
-      @regit-command/*state*)))
-
-(defn- command-for [key]
-  (let [ui-buf (command-buffer)]
-    (binding [*buffer* ui-buf]
-      (regit-command/regit-command-keymap (keys/parse-key-sequence key)))))
-
-(defn- invoke-command-key! [key]
-  (let [cmd (command-for key)]
-    (test/assert (ifn? cmd) (str "missing regit branch command key " key))
-    (let [ui-buf (command-buffer)]
-      (binding [*buffer* ui-buf]
-        (cmd)))))
-
-(defn- invoke-status-key! [key]
-  (let [win (focused-window)
-        buf (window-buffer win)
-        cmd (keys/lookup-keymap status/regit-status-keymap (keys/parse-key-sequence key))]
-    (test/assert (ifn? cmd) (str "missing regit status command key " key))
-    (binding [*buffer* buf]
-      (cmd))))
-
-(defn- close-command! []
-  (when-let [ui-win (minibuffer-ui-window)]
-    (let [ui-buf (window-buffer ui-win)]
-      (binding [*buffer* ui-buf]
-        (when-let [cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "q"))]
-          (cmd))))))
-
-(defn- select-current-iselect-entry! []
-  (let [mb-win (minibuffer-window)]
-    (test/assert mb-win "iselect minibuffer not opened")
-    (binding [*buffer* (window-buffer mb-win)]
-      (iselect/select-current-entry))))
-
-(defn- set-iselect-input! [input]
-  (let [mb-win (minibuffer-window)
-        mb-buf (when mb-win (window-buffer mb-win))]
-    (test/assert mb-buf "iselect minibuffer not opened")
-    (binding [*window* mb-win
-              *buffer* mb-buf]
-      (set-string input mb-buf)
-      (iselect/iselect-update-input))))
-
-(defn- iselect-state []
-  (let [mb-win (minibuffer-window)
-        mb-buf (when mb-win (window-buffer mb-win))]
-    (test/assert mb-buf "iselect minibuffer not opened")
-    (binding [*window* mb-win
-              *buffer* mb-buf]
-      @iselect/*state*)))
-
-(defn- invoke-iselect-key! [key]
-  (let [mb-win (minibuffer-window)
-        mb-buf (when mb-win (window-buffer mb-win))]
-    (test/assert mb-buf "iselect minibuffer not opened")
-    (binding [*window* mb-win
-              *buffer* mb-buf]
-      (let [cmd (keys/lookup-keymap iselect/iselect-keymap (keys/parse-key-sequence key))]
-        (test/assert (ifn? cmd) (str "missing iselect key " key))
-        (cmd)))))
-
-(defn- submit-simple-prompt! [input]
-  (let [mb-win (minibuffer-window)]
-    (test/assert mb-win "simple-prompt minibuffer not opened")
-    (binding [*buffer* (window-buffer mb-win)]
-      (simple-prompt/set-input! input)
-      (simple-prompt/simple-prompt-submit))))
-
-(defn- assert-command-contains [needle]
-  (let [text (command-text)]
-    (test/assert (str/includes? text needle)
-      (str "expected branch command to contain " needle "\nGot:\n" text))))
-
 (defn- assert-command-green-at [needle]
   (let [buf (command-buffer)
-        text (command-text)
-        pos (str/index-of text needle)]
-    (test/assert pos (str "missing command text " needle "\nGot:\n" text))
-    (binding [*buffer* buf]
-      (let [props (buffer/property-at pos)]
-        (test/assert (seq props) (str "expected green properties at " needle))
-        (is= (:fg (style->map (theme/color-style :green)))
-          (:fg (style->map (first props))))))))
+        text (command-text)]
+    (util/assert-buffer-color-at buf text needle :green)))
 
 (defn- assert-command-dimmed-at [needle]
   (let [buf (command-buffer)
-        text (command-text)
-        pos (str/index-of text needle)]
-    (test/assert pos (str "missing command text " needle "\nGot:\n" text))
-    (binding [*buffer* buf]
-      (let [props (buffer/property-at pos)]
-        (test/assert (seq props) (str "expected dimmed properties at " needle))
-        (is= (:fg (style->map (theme/style-for-face :dimmed)))
-          (:fg (style->map (first props))))))))
+        text (command-text)]
+    (util/assert-buffer-face-at buf text needle :dimmed)))
 
 (defn- assert-command-face-at [needle face]
   (let [buf (command-buffer)
-        text (command-text)
-        pos (str/index-of text needle)]
-    (test/assert pos (str "missing command text " needle "\nGot:\n" text))
-    (binding [*buffer* buf]
-      (let [props (buffer/property-at pos)]
-        (test/assert (seq props) (str "expected properties at " needle))
-        (is= (:fg (style->map (theme/style-for-face face)))
-          (:fg (style->map (first props))))))))
+        text (command-text)]
+    (util/assert-buffer-face-at buf text needle face)))
 
 (deftest regit-branch-command-layout-and-bindings-test
   (theme/load-theme :catppuccin-frappe)

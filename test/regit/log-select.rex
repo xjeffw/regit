@@ -1,25 +1,14 @@
 (ns regit.tests.log-select
   (:require [regit.log-select :as log-select]
+            [regit.tests.util :refer [buffer-content cleanup git! git-out]]
             [rex.base.buffer :as buffer]
             [rex.string :as str]
             [rex.test :as test :refer [deftest is=]]))
 
-(defn- git [root & args]
-  (run-shell* "git" (into ["-C" root] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result) (:out result)))
-    result))
-
-(defn- git-out [root & args]
-  (str/trim (:out (apply git! root args))))
-
 (defn- init-log-select-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")
@@ -34,13 +23,6 @@
         _ (git! tmp-dir "add" "three.txt")
         _ (git! tmp-dir "commit" "-m" "three")]
     tmp-dir))
-
-(defn- cleanup [root]
-  (run-shell* "rm" ["-rf" root]))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
 
 (deftest regit-log-select-opens-and-picks-commit-test
   (let [tmp-dir (init-log-select-repo "regit-log-select-pick")

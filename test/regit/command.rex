@@ -1,5 +1,8 @@
 (ns regit.tests.command
   (:require [regit.command :as regit-command]
+            [regit.tests.util :refer [assert-buffer-color-at
+                                      assert-buffer-face-at
+                                      buffer-display-content]]
             [rex.base.buffer :as buffer]
             [rex.base.frame :as frame]
             [rex.base.keys :as keys]
@@ -7,35 +10,10 @@
             [rex.string :as str]
             [rex.test :as test :refer [deftest is= is-error]]))
 
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- display-content [buf]
-  (str/strip-properties (buffer-content buf)))
-
 (defn- close-regit-command-ui! [ui-buf]
   (binding [*buffer* ui-buf]
     (when-let [cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "q"))]
       (cmd))))
-
-(defn- assert-buffer-face-at [buf text needle face]
-  (let [pos (str/index-of text needle)]
-    (test/assert pos (str "missing " needle " in " text))
-    (binding [*buffer* buf]
-      (let [props (buffer/property-at pos)]
-        (test/assert (seq props) (str "missing properties at " needle))
-        (is= (:fg (style->map (theme/style-for-face face)))
-          (:fg (style->map (first props))))))))
-
-(defn- assert-buffer-color-at [buf text needle color]
-  (let [pos (str/index-of text needle)]
-    (test/assert pos (str "missing " needle " in " text))
-    (binding [*buffer* buf]
-      (let [props (buffer/property-at pos)]
-        (test/assert (seq props) (str "missing properties at " needle))
-        (is= (:fg (style->map (theme/color-style color)))
-          (:fg (style->map (first props))))))))
 
 (deftest regit-command-choice-bracket-style-test
   (theme/load-theme :catppuccin-frappe)
@@ -93,7 +71,7 @@
       (test/assert ui-window "minibuffer-ui-window not opened")
       (let [ui-buf (window-buffer ui-window)]
         (binding [*buffer* ui-buf]
-          (let [lines (str/split-lines (display-content ui-buf))]
+          (let [lines (str/split-lines (buffer-display-content ui-buf))]
             (is= 3 (count lines))
             (is= "Actions" (first lines))
             (test/assert (str/includes? (second lines) "a Alpha") "first row missing alpha")
@@ -121,7 +99,7 @@
       (test/assert ui-window "minibuffer-ui-window not opened")
       (let [ui-buf (window-buffer ui-window)]
         (binding [*buffer* ui-buf]
-          (let [lines (str/split-lines (display-content ui-buf))]
+          (let [lines (str/split-lines (buffer-display-content ui-buf))]
             (is= 3 (count lines))
             (test/assert (str/includes? (first lines) "Left") "heading row missing left section")
             (test/assert (str/includes? (first lines) "Right") "heading row missing right section")

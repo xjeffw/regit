@@ -1,6 +1,25 @@
 (ns regit.tests.stash
   (:require [regit.stash :as stash]
             [regit.status :as status]
+            [regit.tests.util :refer [buffer-content
+                                      cleanup
+                                      command-buffer
+                                      command-for
+                                      command-state
+                                      command-text
+                                      command-window
+                                      current-branch
+                                      find-line
+                                      focused-buffer-content
+                                      focused-display-content
+                                      git
+                                      git!
+                                      git-out
+                                      invoke-command-key!
+                                      invoke-focused!
+                                      move-focused-line!
+                                      move-focused-line-containing!
+                                      submit-simple-prompt!]]
             [rex.base.buffer :as buffer]
             [rex.base.keys :as keys]
             [regit.command :as regit-command]
@@ -8,25 +27,13 @@
             [rex.ui.simple-prompt :as simple-prompt]
             [rex.test :as test :refer [deftest is=]]))
 
-(defn- git [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result) (:out result)))
-    result))
-
-(defn- git-out [root & args]
-  (str/trim (:out (apply git! root args))))
-
 (defn- git-status-short [root]
   (:out (git! root "status" "--short")))
 
 (defn- init-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.name" "Rex Test")
         _ (git! tmp-dir "config" "user.email" "rex@example.com")
@@ -37,73 +44,9 @@
         _ (git! tmp-dir "branch" "-M" "main")]
     tmp-dir))
 
-(defn- cleanup [root]
-  (run-shell* "rm" ["-rf" root]))
-
-(defn- command-window []
-  (let [ui-win (minibuffer-ui-window)]
-    (test/assert ui-win "regit command UI not open")
-    ui-win))
-
-(defn- command-buffer []
-  (window-buffer (command-window)))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- command-text []
-  (str/strip-properties (buffer-content (command-buffer))))
-
-(defn- command-state []
-  (let [ui-buf (command-buffer)]
-    (binding [*buffer* ui-buf]
-      @regit-command/*state*)))
-
-(defn- command-for [key]
-  (let [ui-win (command-window)
-        ui-buf (window-buffer ui-win)
-        cmd (binding [*window* ui-win
-                      *buffer* ui-buf]
-              (regit-command/regit-command-keymap (keys/parse-key-sequence key)))]
-    (when cmd
-      (fn []
-        (binding [*window* ui-win
-                  *buffer* ui-buf]
-          (cmd))))))
-
-(defn- invoke-command-key! [key]
-  (let [cmd (command-for key)]
-    (test/assert (ifn? cmd) (str "missing regit stash command key " key))
-    (cmd)))
-
-(defn- with-focused-window [f]
-  (let [win (focused-window)
-        buf (window-buffer win)]
-    (binding [*window* win
-              *buffer* buf]
-      (f))))
-
-(defn- invoke-focused! [f]
-  (with-focused-window f))
-
-(defn- submit-simple-prompt! [input]
-  (let [mb-win (minibuffer-window)]
-    (test/assert mb-win "simple-prompt minibuffer not opened")
-    (binding [*window* mb-win
-              *buffer* (window-buffer mb-win)]
-      (simple-prompt/set-input! input)
-      (simple-prompt/simple-prompt-submit))))
-
 (defn- open-status! [root]
   (status/regit-status root)
   (focused-window))
-
-(defn- focused-buffer-content []
-  (buffer-content (window-buffer (focused-window))))
-
-(defn- focused-display-content []
-  (str/strip-properties (focused-buffer-content)))
 
 (defn- focused-mode []
   (let [win (focused-window)
@@ -111,28 +54,6 @@
     (binding [*window* win
               *buffer* buf]
       *mode*)))
-
-(defn- find-line [content needle]
-  (first (remove nil?
-           (map-indexed (fn [idx line]
-                          (when (str/includes? line needle)
-                            idx))
-             (str/split-lines content)))))
-
-(defn- move-focused-line! [line]
-  (let [win (focused-window)
-        buf (window-buffer win)]
-    (binding [*window* win
-              *buffer* buf]
-      (move-cursor (with-read-lock [lock (buffer-text buf)]
-                     (buffer/line-to-char lock line))
-        false win))))
-
-(defn- move-focused-line-containing! [needle]
-  (let [line (find-line (focused-display-content) needle)]
-    (test/assert line (str "Could not find line containing " needle " in:\n" (focused-display-content)))
-    (move-focused-line! line)
-    line))
 
 (defn- open-stash-command-at-status-stash! [root stash-message]
   (open-status! root)
@@ -150,9 +71,6 @@
 
 (defn- stash-count [root]
   (count (git-stashes root)))
-
-(defn- current-branch [root]
-  (git-out root "rev-parse" "--abbrev-ref" "HEAD"))
 
 (defn- patch-name-for-stash [root stash-id]
   (git-out root "log" "-1" "--format=0001-%f.patch" stash-id))

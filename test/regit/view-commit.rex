@@ -1,23 +1,18 @@
 (ns regit.tests.view-commit
-  (:require [regit.view-commit :as view-commit]
+  (:require [regit.tests.util :refer [assert-focused-buffer-line
+                                      assert-focused-file-line
+                                      buffer-content
+                                      find-line
+                                      git!
+                                      git-cmd
+                                      git-output
+                                      move-to-line]]
+            [regit.view-commit :as view-commit]
             [rex.base.buffer :as buffer]
             [rex.base.frame :as frame]
             [rex.base.keys :as keys]
             [rex.string :as str]
             [rex.test :as test :refer [deftest is= is-error]]))
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git-cmd root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result)))))
-
-(defn- git-output [root & args]
-  (let [result (apply git-cmd root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result)))
-    (str/trim (:out result))))
 
 (defn- head-commit-id [root]
   (git-output root "rev-parse" "HEAD"))
@@ -25,8 +20,8 @@
 (defn- repo-with-middle-line-commit [name]
   (let [root (temp-file-path name)
         file-path (path-join root "test.txt")]
-    (run-shell* "rm" ["-rf" root])
-    (run-shell* "mkdir" [root])
+    (run-shell* "rm" ["-rf" root] {:direnv false})
+    (run-shell* "mkdir" [root] {:direnv false})
     (git! root "init")
     (git! root "config" "user.name" "Rex Test")
     (git! root "config" "user.email" "rex@example.com")
@@ -37,45 +32,6 @@
     (git! root "add" "test.txt")
     (git! root "commit" "-m" "second")
     root))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- find-line [text needle]
-  (let [lines (str/split-lines text)]
-    (some (fn [i]
-            (when (str/includes? (str (nth lines i)) needle)
-              i))
-      (range (count lines)))))
-
-(defn- move-to-line [buffer window line]
-  (let [pos (with-read-lock [lock (buffer-text buffer)]
-              (buffer/line-to-char lock line))]
-    (move-cursor pos false window)))
-
-(defn- focused-buffer []
-  (window-buffer (focused-window)))
-
-(defn- buffer-line-text [buf line]
-  (with-read-lock [lock (buffer-text buf)]
-    (str/trim-newline (buffer/text-line lock line))))
-
-(defn- assert-focused-buffer-line [expected-line expected-text]
-  (let [target-buffer (focused-buffer)]
-    (is= expected-line (current-line target-buffer))
-    (is= expected-text (buffer-line-text target-buffer expected-line))
-    target-buffer))
-
-(defn- assert-focused-file-line [file-path expected-line expected-text]
-  (let [target-buffer (focused-buffer)
-        actual-file (:file target-buffer)]
-    (test/assert actual-file
-      (str "expected focused buffer to have a file path, got " (:name target-buffer)))
-    (is= (path-canonicalize file-path) (path-canonicalize actual-file))
-    (is= expected-line (current-line target-buffer))
-    (is= expected-text (buffer-line-text target-buffer expected-line))
-    target-buffer))
 
 (deftest regit-view-commit-keymap-binds-enter-and-control-enter-test
   (is= #'view-commit/regit-view-commit-enter
@@ -88,17 +44,17 @@
 (after! [regit.status :as regit-status]
   (deftest regit-view-commit-from-status-test
     (let [tmp-dir (temp-file-path "regit-view-commit-from-status-test")
-          _ (run-shell* "rm" ["-rf" tmp-dir])
-          _ (run-shell* "mkdir" [tmp-dir])
-          _ (run-shell* "git" ["-C" tmp-dir "init"])
-          _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
-          _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
+          _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+          _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+          _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+          _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
+          _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
           _ (write-file (path-join tmp-dir "f.txt") "1")
-          _ (run-shell* "git" ["-C" tmp-dir "add" "f.txt"])
-          _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "c1"])
+          _ (run-shell* "git" ["-C" tmp-dir "add" "f.txt"] {:direnv false})
+          _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "c1"] {:direnv false})
           _ (write-file (path-join tmp-dir "f.txt") "2")
-          _ (run-shell* "git" ["-C" tmp-dir "add" "f.txt"])
-          _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "c2"])]
+          _ (run-shell* "git" ["-C" tmp-dir "add" "f.txt"] {:direnv false})
+          _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "c2"] {:direnv false})]
       (delete-other-windows)
       (regit-status/regit-status tmp-dir)
       (let [status-window (focused-window)
@@ -150,22 +106,22 @@
                             (test/assert (str/index-of text summary) "view-commit buffer missing commit summary"))
                           (when-let [author (:author info)]
                             (test/assert (str/index-of text author) "view-commit buffer missing commit author"))))))))))))
-      (run-shell* "rm" ["-rf" tmp-dir]))))
+      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
 
 (deftest regit-view-commit-jump-to-file-test
   (let [tmp-dir (temp-file-path "regit-view-commit-jump-to-file-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
-        _ (run-shell* "git" ["-C" tmp-dir "init"])
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "line1\nline2\nline3\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"])
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
+        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial commit"] {:direnv false})
         _ (write-file file-path "line1\nline2 modified\nline3\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"])
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "second commit"])
+        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "second commit"] {:direnv false})
         root tmp-dir
         recent-commits (git-recent-commits root 1)
         commit (first recent-commits)
@@ -194,7 +150,7 @@
               (view-commit/regit-view-commit-enter)
               (let [new-buffer (window-buffer view-window)]
                 (is= (path-canonicalize (path-join root path)) (path-canonicalize (:file new-buffer))))))))
-      (run-shell* "rm" ["-rf" tmp-dir]))))
+      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
 
 (deftest regit-view-commit-enter-on-added-hunk-line-jumps-to-commit-line-test
   (let [root (repo-with-middle-line-commit "regit-view-commit-enter-added-line")
@@ -215,7 +171,7 @@
               (test/assert (str/includes? (:name target-buffer) "*commit[")
                 (str "expected commit synthetic buffer, got " (:name target-buffer)))))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))
 
 (deftest regit-view-commit-enter-on-removed-hunk-line-jumps-to-parent-line-test
   (let [root (repo-with-middle-line-commit "regit-view-commit-enter-removed-line")]
@@ -235,7 +191,7 @@
               (test/assert (str/includes? (:name target-buffer) "^]: test.txt*")
                 (str "expected parent synthetic buffer, got " (:name target-buffer)))))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))
 
 (deftest regit-view-commit-jump-to-file-on-added-hunk-line-jumps-to-working-line-test
   (let [root (repo-with-middle-line-commit "regit-view-commit-jump-file-added-line")
@@ -254,4 +210,4 @@
             (view-commit/regit-view-commit-jump-to-file)
             (assert-focused-file-line file-path 1 "line 2 changed"))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))

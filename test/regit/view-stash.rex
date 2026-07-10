@@ -1,69 +1,17 @@
 (ns regit.tests.view-stash
-  (:require [regit.view-stash :as view-stash]
+  (:require [regit.tests.util :refer [assert-focused-buffer-line
+                                      assert-focused-file-line
+                                      buffer-content
+                                      find-line
+                                      git!
+                                      git-cmd
+                                      move-to-line
+                                      repo-with-middle-line-change]]
+            [regit.view-stash :as view-stash]
             [rex.base.buffer :as buffer]
             [rex.base.keys :as keys]
             [rex.string :as str]
             [rex.test :as test :refer [deftest is= is-error]]))
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git-cmd root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result)))))
-
-(defn- repo-with-middle-line-change [name]
-  (let [root (temp-file-path name)
-        file-path (path-join root "test.txt")]
-    (run-shell* "rm" ["-rf" root])
-    (run-shell* "mkdir" [root])
-    (git! root "init")
-    (git! root "config" "user.name" "Rex Test")
-    (git! root "config" "user.email" "rex@example.com")
-    (write-file file-path "line 1\nline 2\nline 3\n")
-    (git! root "add" "test.txt")
-    (git! root "commit" "-m" "initial")
-    (write-file file-path "line 1\nline 2 changed\nline 3\n")
-    root))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- find-line [text needle]
-  (let [lines (str/split-lines text)]
-    (some (fn [i]
-            (when (str/includes? (str (nth lines i)) needle)
-              i))
-      (range (count lines)))))
-
-(defn- move-to-line [buffer window line]
-  (let [pos (with-read-lock [lock (buffer-text buffer)]
-              (buffer/line-to-char lock line))]
-    (move-cursor pos false window)))
-
-(defn- focused-buffer []
-  (window-buffer (focused-window)))
-
-(defn- buffer-line-text [buf line]
-  (with-read-lock [lock (buffer-text buf)]
-    (str/trim-newline (buffer/text-line lock line))))
-
-(defn- assert-focused-buffer-line [expected-line expected-text]
-  (let [target-buffer (focused-buffer)]
-    (is= expected-line (current-line target-buffer))
-    (is= expected-text (buffer-line-text target-buffer expected-line))
-    target-buffer))
-
-(defn- assert-focused-file-line [file-path expected-line expected-text]
-  (let [target-buffer (focused-buffer)
-        actual-file (:file target-buffer)]
-    (test/assert actual-file
-      (str "expected focused buffer to have a file path, got " (:name target-buffer)))
-    (is= (path-canonicalize file-path) (path-canonicalize actual-file))
-    (is= expected-line (current-line target-buffer))
-    (is= expected-text (buffer-line-text target-buffer expected-line))
-    target-buffer))
 
 (deftest regit-view-stash-keymap-binds-enter-and-control-enter-test
   (is= #'view-stash/regit-view-stash-enter
@@ -75,21 +23,21 @@
 
 (deftest regit-view-stash-shows-separate-summaries-test
   (let [tmp-dir (temp-file-path "regit-view-stash-shows-separate-summaries-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
-        _ (run-shell* "git" ["-C" tmp-dir "init"])
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
         staged-path (path-join tmp-dir "index.txt")
         unstaged-path (path-join tmp-dir "worktree.txt")
         _ (write-file staged-path "keep\nremove\n")
         _ (write-file unstaged-path "keep\nremove\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "index.txt" "worktree.txt"])
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (run-shell* "git" ["-C" tmp-dir "add" "index.txt" "worktree.txt"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
         _ (write-file staged-path "keep\nstaged\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "index.txt"])
+        _ (run-shell* "git" ["-C" tmp-dir "add" "index.txt"] {:direnv false})
         _ (write-file unstaged-path "keep\nunstaged\n")
-        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "summary stash"])]
+        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "summary stash"] {:direnv false})]
     (delete-other-windows)
     (let [buf (create-buffer)]
       (swap! (buffer-state buf) assoc :regit-root tmp-dir)
@@ -115,21 +63,21 @@
                 (str "regit-view-stash buffer missing unstaged summary. Got: " text))
               (test/assert (str/includes? text "worktree.txt | 2 +-")
                 (str "regit-view-stash buffer missing unstaged per-file summary. Got: " text)))))))
-    (run-shell* "rm" ["-rf" tmp-dir])))
+    (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})))
 
 (deftest regit-view-stash-apply-test
   (let [tmp-dir (temp-file-path "regit-view-stash-apply-test")
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
-        _ (run-shell* "git" ["-C" tmp-dir "init"])
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"])
-        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "init"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "config" "user.name" "Rex Test"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "config" "user.email" "rex@example.com"] {:direnv false})
         file-path (path-join tmp-dir "test.txt")
         _ (write-file file-path "line 1\nline 2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"])
-        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"])
+        _ (run-shell* "git" ["-C" tmp-dir "add" "test.txt"] {:direnv false})
+        _ (run-shell* "git" ["-C" tmp-dir "commit" "-m" "initial"] {:direnv false})
         _ (write-file file-path "line 1 modified\nline 2\n")
-        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"])
+        _ (run-shell* "git" ["-C" tmp-dir "stash" "push" "-m" "test stash"] {:direnv false})
         _ (write-file file-path "line 1\nline 2\n")]
     (let [status-buffer (create-buffer)]
       (binding [*buffer* status-buffer]
@@ -169,7 +117,7 @@
                           (str "Status buffer missing test.txt. Got: " status-text))
                         (test/assert (str/includes? status-text "Unstaged changes")
                           (str "Status buffer missing Unstaged changes. Got: " status-text)))))))))))
-      (run-shell* "rm" ["-rf" tmp-dir]))))
+      (run-shell* "rm" ["-rf" tmp-dir] {:direnv false}))))
 
 (deftest regit-view-stash-enter-on-added-hunk-line-jumps-to-stash-line-test
   (let [root (repo-with-middle-line-change "regit-view-stash-enter-added-line")]
@@ -189,7 +137,7 @@
               (test/assert (str/includes? (:name target-buffer) "*stash[stash@{0}]: test.txt*")
                 (str "expected stash synthetic buffer, got " (:name target-buffer)))))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))
 
 (deftest regit-view-stash-enter-on-removed-hunk-line-jumps-to-stash-index-line-test
   (let [root (repo-with-middle-line-change "regit-view-stash-enter-removed-line")]
@@ -209,7 +157,7 @@
               (test/assert (str/includes? (:name target-buffer) "*stash[stash@{0}^2]: test.txt*")
                 (str "expected stash index synthetic buffer, got " (:name target-buffer)))))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))
 
 (deftest regit-view-stash-jump-to-file-on-added-hunk-line-jumps-to-working-line-test
   (let [root (repo-with-middle-line-change "regit-view-stash-jump-file-added-line")
@@ -228,4 +176,4 @@
             (view-stash/regit-view-stash-jump-to-file)
             (assert-focused-file-line file-path 1 "line 2"))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))

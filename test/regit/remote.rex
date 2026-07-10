@@ -1,6 +1,20 @@
 (ns regit.tests.remote
   (:require [regit.remote :as remote]
             [regit.status :as status]
+            [regit.tests.util :refer [assert-command-contains
+                                      cleanup
+                                      close-command!
+                                      commit-file!
+                                      command-state
+                                      git
+                                      git!
+                                      git-config
+                                      git-out
+                                      init-test-repo
+                                      invoke-command-key!
+                                      select-current-iselect-entry!
+                                      set-iselect-input!
+                                      submit-simple-prompt!]]
             [rex.base.keys :as keys]
             [rex.base.buffer :as buffer]
             [rex.base.theme :as theme]
@@ -9,23 +23,6 @@
             [rex.ui.simple-prompt :as simple-prompt]
             [rex.string :as str]
             [rex.test :as test :refer [deftest is=]]))
-
-(defn- git [root & args]
-  (run-shell* "git" (into ["-C" root] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result) (:out result)))
-    result))
-
-(defn- git-out [root & args]
-  (str/trim (:out (apply git! root args))))
-
-(defn- git-config [root key]
-  (let [{:keys [code out]} (git root "config" "--get" key)]
-    (when (zero? code)
-      (str/trim out))))
 
 (defn- git-config-all [root key]
   (let [{:keys [code out]} (git root "config" "--get-all" key)]
@@ -38,26 +35,10 @@
   (doseq [value values]
     (git! root "config" "--add" key value)))
 
-(defn- commit-file! [root file content subject]
-  (write-file (path-join root file) content)
-  (git! root "add" file)
-  (git! root "commit" "-m" subject))
-
-(defn- init-test-repo [name]
-  (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
-        _ (git! tmp-dir "init")
-        _ (git! tmp-dir "config" "user.email" "test@example.com")
-        _ (git! tmp-dir "config" "user.name" "Test User")
-        _ (commit-file! tmp-dir "test.txt" "hello\n" "initial")
-        _ (git! tmp-dir "branch" "-M" "main")]
-    tmp-dir))
-
 (defn- init-master-test-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
         _ (git! tmp-dir "init")
         _ (git! tmp-dir "config" "user.email" "test@example.com")
         _ (git! tmp-dir "config" "user.name" "Test User")
@@ -67,80 +48,12 @@
 
 (defn- init-bare-repo [name]
   (let [tmp-dir (temp-file-path name)
-        _ (run-shell* "rm" ["-rf" tmp-dir])
-        _ (run-shell* "mkdir" [tmp-dir])
-        result (run-shell* "git" ["init" "--bare" tmp-dir])]
+        _ (run-shell* "rm" ["-rf" tmp-dir] {:direnv false})
+        _ (run-shell* "mkdir" [tmp-dir] {:direnv false})
+        result (run-shell* "git" ["init" "--bare" tmp-dir] {:direnv false})]
     (test/assert (zero? (:code result))
       (str "git init --bare failed: " (:err result) (:out result)))
     tmp-dir))
-
-(defn- cleanup [& paths]
-  (doseq [path paths]
-    (when path
-      (run-shell* "rm" ["-rf" path]))))
-
-(defn- command-buffer []
-  (let [ui-win (minibuffer-ui-window)]
-    (test/assert ui-win "regit command UI not open")
-    (window-buffer ui-win)))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- command-text []
-  (str/strip-properties (buffer-content (command-buffer))))
-
-(defn- command-state []
-  (let [ui-buf (command-buffer)]
-    (binding [*buffer* ui-buf]
-      @regit-command/*state*)))
-
-(defn- command-for [key]
-  (let [ui-buf (command-buffer)]
-    (binding [*buffer* ui-buf]
-      (regit-command/regit-command-keymap (keys/parse-key-sequence key)))))
-
-(defn- invoke-command-key! [key]
-  (let [cmd (command-for key)]
-    (test/assert (ifn? cmd) (str "missing regit remote command key " key))
-    (let [ui-buf (command-buffer)]
-      (binding [*buffer* ui-buf]
-        (cmd)))))
-
-(defn- close-command! []
-  (when-let [ui-win (minibuffer-ui-window)]
-    (let [ui-buf (window-buffer ui-win)]
-      (binding [*buffer* ui-buf]
-        (when-let [cmd (regit-command/regit-command-keymap (keys/parse-key-sequence "q"))]
-          (cmd))))))
-
-(defn- assert-command-contains [needle]
-  (let [text (command-text)]
-    (test/assert (str/includes? text needle)
-      (str "expected remote command to contain " needle "\nGot:\n" text))))
-
-(defn- set-iselect-input! [input]
-  (let [mb-win (minibuffer-window)
-        mb-buf (when mb-win (window-buffer mb-win))]
-    (test/assert mb-buf "iselect minibuffer not opened")
-    (binding [*window* mb-win
-              *buffer* mb-buf]
-      (set-string input mb-buf)
-      (iselect/iselect-update-input))))
-
-(defn- select-current-iselect-entry! []
-  (let [mb-win (minibuffer-window)]
-    (test/assert mb-win "iselect minibuffer not opened")
-    (binding [*buffer* (window-buffer mb-win)]
-      (iselect/select-current-entry))))
-
-(defn- submit-simple-prompt! [input]
-  (let [mb-win (minibuffer-window)]
-    (test/assert mb-win "simple-prompt minibuffer not opened")
-    (binding [*buffer* (window-buffer mb-win)]
-      (simple-prompt/set-input! input)
-      (simple-prompt/simple-prompt-submit))))
 
 (defn- ref-exists? [root ref]
   (zero? (:code (git root "show-ref" "--verify" "--quiet" ref))))
@@ -268,10 +181,10 @@
     (git! tmp-dir "push" "-u" "origin" "master")
     (git! tmp-dir "remote" "set-head" "origin" "master")
     (let [head (git-out tmp-dir "rev-parse" "HEAD")]
-      (let [result (run-shell* "git" ["--git-dir" bare-dir "update-ref" "refs/heads/main" head])]
+      (let [result (run-shell* "git" ["--git-dir" bare-dir "update-ref" "refs/heads/main" head] {:direnv false})]
         (test/assert (zero? (:code result))
           (str "bare update-ref failed: " (:err result) (:out result))))
-      (let [result (run-shell* "git" ["--git-dir" bare-dir "symbolic-ref" "HEAD" "refs/heads/main"])]
+      (let [result (run-shell* "git" ["--git-dir" bare-dir "symbolic-ref" "HEAD" "refs/heads/main"] {:direnv false})]
         (test/assert (zero? (:code result))
           (str "bare symbolic-ref failed: " (:err result) (:out result)))))
     (remote/update-default-branch! tmp-dir (focused-window))

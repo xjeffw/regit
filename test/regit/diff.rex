@@ -1,5 +1,6 @@
 (ns regit.tests.diff
   (:require [regit.diff :as diff]
+            [regit.tests.util :refer [buffer-content find-line git! git-output move-to-line]]
             [rex.string :as str]
             [rex.test :as test :refer [deftest is= is-error]]
             [rex.base.buffer :as buffer]
@@ -32,25 +33,11 @@
         line (second (str/split-lines summary))]
     (is= 100 (+ (count-char line \+) (count-char line \-)))))
 
-(defn- git-cmd [root & args]
-  (run-shell* "git" (into ["-C" (str root)] args)))
-
-(defn- git! [root & args]
-  (let [result (apply git-cmd root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result)))))
-
-(defn- git-output [root & args]
-  (let [result (apply git-cmd root args)]
-    (test/assert (zero? (:code result))
-      (str "git command failed: " args "\n" (:err result)))
-    (str/trim (:out result))))
-
 (defn- repo-with-change [name]
   (let [root (temp-file-path name)
         file-path (path-join root "test.txt")]
-    (run-shell* "rm" ["-rf" root])
-    (run-shell* "mkdir" [root])
+    (run-shell* "rm" ["-rf" root] {:direnv false})
+    (run-shell* "mkdir" [root] {:direnv false})
     (git! root "init")
     (git! root "config" "user.name" "Rex Test")
     (git! root "config" "user.email" "rex@example.com")
@@ -71,22 +58,6 @@
     (git! root "add" "test.txt")
     (git! root "stash" "push" "-m" "context stash")
     root))
-
-(defn- buffer-content [buf]
-  (with-read-lock [lock (buffer-text buf)]
-    (buffer/slice lock 0 (buffer/len-chars lock))))
-
-(defn- find-line [text needle]
-  (let [lines (str/split-lines text)]
-    (some (fn [i]
-            (when (str/includes? (str (nth lines i)) needle)
-              i))
-      (range (count lines)))))
-
-(defn- move-to-line [buffer window line]
-  (let [pos (with-read-lock [lock (buffer-text buffer)]
-              (buffer/line-to-char lock line))]
-    (move-cursor pos false window)))
 
 (defn- diff-context-decoration [buffer]
   (diff/regit-diff-context-decoration-for-buffer buffer))
@@ -161,7 +132,7 @@
           (is= "modified test.txt" (diff-context-row-text content-row))
           (is= "" (diff-context-row-text file-row))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))
 
 (deftest regit-status-diff-context-decoration-renders-expanded-hunk-test
   (let [root (repo-with-change "regit-status-diff-context-decoration-test")]
@@ -194,7 +165,7 @@
           (is= "modified test.txt"
             (diff-context-row-text (diff-context-row-at-line buffer content-line)))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))
 
 (deftest regit-view-commit-diff-context-decoration-renders-hunk-file-header-test
   (let [root (repo-with-committed-change "regit-view-commit-diff-context-decoration-test")]
@@ -212,7 +183,7 @@
               "modified test.txt"
               "+line 1 changed"))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))
 
 (deftest regit-view-stash-diff-context-decoration-renders-hunk-file-header-test
   (let [root (repo-with-stash "regit-view-stash-diff-context-decoration-test")]
@@ -229,4 +200,4 @@
               "modified test.txt"
               "+line 1 changed"))))
       (finally
-        (run-shell* "rm" ["-rf" root])))))
+        (run-shell* "rm" ["-rf" root] {:direnv false})))))

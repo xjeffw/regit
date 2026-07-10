@@ -1,5 +1,6 @@
 (ns regit.tests.all)
 
+(require 'regit.tests.util)
 (require 'regit.tests.branch)
 (require 'regit.tests.command)
 (require 'regit.tests.commit)
