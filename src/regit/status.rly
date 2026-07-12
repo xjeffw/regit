@@ -54,9 +54,27 @@
 (defn status-buffer-name [root]
   (str "*regit-status: " (repo-name root) "*"))
 
+(defn- status-buffer-label-parts [root]
+  (let [worktree-name (repo-name root)
+        result (git-cmd! root "rev-parse" "--path-format=absolute"
+                 "--git-dir" "--git-common-dir")
+        paths (when (zero? (:code result))
+                (str/split-lines (str/trim (:out result))))
+        git-dir (first paths)
+        common-dir (second paths)
+        linked-worktree? (and git-dir common-dir (not= git-dir common-dir))
+        repo-name (when linked-worktree?
+                    (some-> common-dir path-parent path-filename))]
+    {:repo (or repo-name worktree-name)
+     :worktree (when linked-worktree? worktree-name)}))
+
 (defn- status-buffer-label [root]
-  (str (theme/with-face "regit-status: " :special-buffer)
-    (theme/with-face (repo-name root) :regit-repo)))
+  (let [{:keys [repo worktree]} (status-buffer-label-parts root)]
+    (str (theme/with-face "regit-status: " :special-buffer)
+      (theme/with-face repo :regit-repo)
+      (when worktree
+        (str (theme/with-face "/" :default)
+          (theme/with-face worktree :regit-worktree))))))
 
 (defn find-status-buffer [root]
   (let [name (status-buffer-name root)]

@@ -5,6 +5,7 @@
             [relay.base.frame :as frame]
             [relay.base.keys :as keys]
             [relay.base.mode :as mode]
+            [relay.base.theme :as theme]
             [regit.command :as regit-command]
             [regit.diff :as regit-diff]
             [regit.preview :as regit-preview]
@@ -93,6 +94,46 @@
   (let [line (status/commit-line {:id "abc1234" :refs [] :summary "summary"})]
     (test/assert (property-string? line) "commit-line should preserve styled commit hash")
     (test/assert (str/includes? line "abc1234 summary") "commit-line missing commit text")))
+
+(deftest regit-status-linked-worktree-buffer-label-test
+  (let [parent (temp-file-path "regit-status-worktree-label")
+        root (path-join parent "relay")
+        worktree (path-join parent "work1")
+        label-buffer (create-buffer true)]
+    (try
+      (sh! "rm" ["-rf" parent])
+      (sh! "mkdir" [parent])
+      (sh! "mkdir" [(str root)])
+      (git! root "init")
+      (git! root "config" "user.name" "Relay Test")
+      (git! root "config" "user.email" "relay@example.com")
+      (git! root "commit" "--allow-empty" "-m" "initial")
+      (git! root "branch" "-M" "main")
+      (git! root "worktree" "add" "-b" "work1" (str worktree))
+      (let [label (status/status-buffer-label worktree)
+            prefix-length (count "regit-status: ")
+            repo-end (+ prefix-length (count "relay"))
+            slash-end (inc repo-end)
+            worktree-end (+ slash-end (count "work1"))]
+        (is= "regit-status: relay/work1" (str/strip-properties label))
+        (binding [*buffer* label-buffer]
+          (set-string label)
+          (let [spans (buffer/property-spans label-buffer)
+                span-at (fn [start end]
+                          (first (filter #(and (= start (:start %))
+                                            (= end (:end %)))
+                                   spans)))
+                repo-style (style->map (:properties (span-at prefix-length repo-end)))
+                slash-style (style->map (:properties (span-at repo-end slash-end)))
+                worktree-style (style->map (:properties (span-at slash-end worktree-end)))]
+            (is= (:fg (style->map (theme/style-for-face :regit-repo)))
+              (:fg repo-style))
+            (is= (:fg (style->map (theme/style-for-face :default)))
+              (:fg slash-style))
+            (is= (theme/color-hex :maroon) (:fg worktree-style)))))
+      (finally
+        (kill-buffer label-buffer)
+        (sh! "rm" ["-rf" parent])))))
 
 (defn- find-cached-node [old-tree id]
   (get (status/index-tree-nodes old-tree) id))
