@@ -1275,6 +1275,45 @@
     (open-status-buffer! root focus?)
     (message "No git project found for the current buffer")))
 
+(defn- status-worktree-label [repository-name index worktree]
+  (str
+    (theme/with-face repository-name :regit-repo)
+    (when (pos? index)
+      (str
+        (theme/with-face "/" :default)
+        (theme/with-face (repo-name (:path worktree)) :regit-worktree)))))
+
+(defn- status-worktree-action [worktree]
+  (when worktree
+    (fn []
+      (regit-status (:path worktree)))))
+
+(defn ^:interactive regit-status-worktree []
+  (if-let [root (project/current-project-root)]
+    (let [worktrees (git-worktrees root)
+          repository-name (some-> worktrees first :path repo-name)
+          choices (vec
+                    (map-indexed
+                      (fn [index worktree]
+                        (assoc worktree :label
+                          (status-worktree-label repository-name index worktree)))
+                      worktrees))]
+      (if (seq choices)
+        (iselect/iselect "Status worktree:"
+          (fn [_input] choices)
+          status-worktree-action
+          {:render-fn (fn [worktree] (:label worktree))
+           :autosubmit #"[1-9]"
+           :submit-fn (fn [input selected-worktree]
+                        (let [number (keys/digit-from-string input)
+                              worktree (if number
+                                         (nth choices (dec number) nil)
+                                         selected-worktree)]
+                          (or (status-worktree-action worktree)
+                            :keep-open)))})
+        (message "No git worktrees found")))
+    (message "No git project found for the current buffer")))
+
 (def regit-status-commands
   {"s" {:label "stage" :fn #'regit-stage}
    "u" {:label "unstage" :fn #'regit-unstage}
@@ -1283,6 +1322,7 @@
    "M" {:label "remote" :fn #'regit-remote}
    "b" {:label "branch" :fn #'regit-branch}
    "Z" {:label "worktree" :fn #'regit-worktree}
+   "w" {:label "status worktree" :fn #'regit-status-worktree}
    "x" {:label "discard" :fn #'regit-discard}
    "c" {:label "commit" :fn #'regit-commit}
    "m" {:label "merge" :fn #'regit-merge}
@@ -1297,7 +1337,7 @@
    "q" {:label "quit" :fn #'close-buffer}})
 
 (def regit-status-command-order
-  ["s" "u" "f" "F" "M" "b" "Z" "x" "c" "m" "r" "O" "l" "z" "P" "a" "<enter>" "C-<enter>" "q" "?"])
+  ["s" "u" "f" "F" "M" "b" "Z" "w" "x" "c" "m" "r" "O" "l" "z" "P" "a" "<enter>" "C-<enter>" "q" "?"])
 
 (def regit-status-command-sections
   [["Transient and dwim commands"
@@ -1313,6 +1353,7 @@
      ["O" "Reset"]
      ["z" "Stash"]
      ["Z" "Worktree"]
+     ["w" "Status worktree"]
      ["?" "Help"]]]
    ["Applying changes"
     [["a" "Apply"]

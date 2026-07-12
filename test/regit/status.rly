@@ -1,10 +1,19 @@
 (ns regit.tests.status
   (:require [regit.status :as status]
-            [regit.tests.util :refer [buffer-content-lines git! git-cmd sh!]]
+            [regit.tests.util :refer [buffer-content-lines
+                                      cleanup
+                                      git!
+                                      git-cmd
+                                      invoke-status-key!
+                                      iselect-state
+                                      send-keys
+                                      sh!
+                                      wait-for-focused-status]]
             [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
             [relay.base.keys :as keys]
             [relay.base.mode :as mode]
+            [relay.base.project :as project]
             [relay.base.theme :as theme]
             [regit.command :as regit-command]
             [regit.diff :as regit-diff]
@@ -90,6 +99,14 @@
 (defn- unmerged-index [root]
   (get-git-output root "ls-files" "-u" "--" "conflict.txt"))
 
+(defn- enter-iselect-character! [character]
+  (let [window (minibuffer-window)
+        buffer (when window (window-buffer window))]
+    (test/assert buffer "iselect minibuffer should be open")
+    (binding [*window* window
+              *buffer* buffer]
+      (send-keys character))))
+
 (deftest commit-line-hash-face-test
   (let [line (status/commit-line {:id "abc1234" :refs [] :summary "summary"})]
     (test/assert (property-string? line) "commit-line should preserve styled commit hash")
@@ -134,6 +151,85 @@
       (finally
         (kill-buffer label-buffer)
         (sh! "rm" ["-rf" parent])))))
+
+(deftest regit-status-worktree-keybindings-test
+  (is= #'status/regit-status-worktree
+    (keys/lookup-keymap status/regit-status-keymap
+      (keys/parse-key-sequence "w")))
+  (is= #'status/regit-status-worktree
+    (keys/lookup-keymap keys/default-keymap
+      (keys/parse-key-sequence "<space> g w"))))
+
+(deftest regit-status-worktree-selects-current-or-recent-repository-worktree-test
+  (let [parent (temp-file-path "regit-status-worktree-select")
+        root (path-join parent "relay")
+        work1 (path-join parent "work1")
+        work2 (path-join parent "work2")
+        source-buffer (create-buffer true)
+        label-buffer (create-buffer true)
+        previous-recent-root @project/recent-project-root
+        previous-recent-buffer @project/recent-project-buffer]
+    (try
+      (cleanup parent)
+      (sh! "mkdir" [parent])
+      (sh! "mkdir" [(str root)])
+      (git! root "init")
+      (git! root "config" "user.name" "Relay Test")
+      (git! root "config" "user.email" "relay@example.com")
+      (git! root "commit" "--allow-empty" "-m" "initial")
+      (git! root "branch" "-M" "main")
+      (git! root "worktree" "add" "-b" "work1" (str work1) "HEAD")
+      (git! root "worktree" "add" "-b" "work2" (str work2) "HEAD")
+      (let [source-window (focused-window)
+            leader-command (keys/lookup-keymap keys/default-keymap
+                             (keys/parse-key-sequence "<space> g w"))]
+        (set-window-buffer source-buffer source-window)
+        (reset! project/recent-project-root (str root))
+        (reset! project/recent-project-buffer nil)
+        (binding [*window* source-window
+                  *buffer* source-buffer]
+          (leader-command)))
+      (let [state (iselect-state)
+            entries (:entries state)
+            render-fn (:render-fn state)
+            labels (mapv render-fn entries)]
+        (is= [(str (path-canonicalize root))
+              (str (path-canonicalize work1))
+              (str (path-canonicalize work2))]
+          (mapv :path entries))
+        (is= ["relay" "relay/work1" "relay/work2"]
+          (mapv str/strip-properties labels))
+        (test/assert (re-matches (:autosubmit state) "1")
+          "worktree selector should autosubmit digits 1 through 9")
+        (test/assert (not (re-matches (:autosubmit state) "0"))
+          "worktree selector should not autosubmit zero")
+        (binding [*buffer* label-buffer]
+          (set-string (second labels))
+          (let [spans (buffer/property-spans label-buffer)
+                span-at (fn [start end]
+                          (first (filter #(and (= start (:start %))
+                                            (= end (:end %)))
+                                   spans)))
+                repo-style (style->map (:properties (span-at 0 5)))
+                worktree-style (style->map (:properties (span-at 6 11)))]
+            (is= (:fg (style->map (theme/style-for-face :regit-repo)))
+              (:fg repo-style))
+            (is= (:fg (style->map (theme/style-for-face :regit-worktree)))
+              (:fg worktree-style)))))
+      (enter-iselect-character! "2")
+      (wait-for-focused-status work1 "numeric recent-project worktree selection")
+      (invoke-status-key! "w")
+      (enter-iselect-character! "3")
+      (wait-for-focused-status work2 "numeric current-project worktree selection")
+      (finally
+        (doseq [worktree [root work1 work2]]
+          (when-let [status-buffer (status/find-status-buffer worktree)]
+            (kill-buffer status-buffer)))
+        (kill-buffer label-buffer)
+        (kill-buffer source-buffer)
+        (reset! project/recent-project-root previous-recent-root)
+        (reset! project/recent-project-buffer previous-recent-buffer)
+        (cleanup parent)))))
 
 (defn- find-cached-node [old-tree id]
   (get (status/index-tree-nodes old-tree) id))
