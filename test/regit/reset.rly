@@ -16,6 +16,7 @@
                                       move-focused-line!
                                       move-focused-line-containing!
                                       select-current-iselect-entry!
+                                      set-iselect-input!
                                       sh!]]
             [regit.command :as regit-command]
             [relay.ui.iselect :as iselect]
@@ -100,6 +101,19 @@
     (invoke-status-key! "O")
     (invoke-reset-action! "h")
     (assert-reset-iselect-default target)
+    (select-current-iselect-entry!)
+    (is= target (current-head tmp-dir))
+    (cleanup tmp-dir)))
+
+(deftest regit-reset-status-hard-disambiguates-branch-from-path-test
+  (let [tmp-dir (init-reset-test-repo "regit-reset-hard-disambiguates-branch")
+        _ (git! tmp-dir "branch" "work1" "HEAD~1")
+        _ (commit-file! tmp-dir "work1" "ambiguous path\n" "add ambiguous path")
+        target (short-hash tmp-dir "work1")]
+    (status/regit-status tmp-dir)
+    (invoke-status-key! "O")
+    (invoke-reset-action! "h")
+    (set-iselect-input! "work1")
     (select-current-iselect-entry!)
     (is= target (current-head tmp-dir))
     (cleanup tmp-dir)))

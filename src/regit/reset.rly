@@ -165,8 +165,8 @@
       :else
       (run-git! root operation
         (vec (remove nil?
-               (concat ["reset" arg target]
-                 (when path ["--" path]))))
+               (concat ["reset" arg target "--"]
+                 (when path [path]))))
         opts))))
 
 (defn- reset-branch! [root branch target & [opts]]
