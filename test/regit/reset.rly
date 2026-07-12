@@ -93,6 +93,19 @@
             (close-cmd)))))
     (cleanup tmp-dir)))
 
+(deftest regit-reset-branch-selection-starts-with-empty-input-test
+  (let [tmp-dir (init-reset-test-repo "regit-reset-branch-empty-input")]
+    (status/regit-status tmp-dir)
+    (invoke-status-key! "O")
+    (invoke-reset-action! "b")
+    (let [mb-win (minibuffer-window)
+          mb-buf (when mb-win (window-buffer mb-win))]
+      (test/assert mb-buf "branch iselect minibuffer not opened")
+      (binding [*buffer* mb-buf]
+        (test/assert (= :iselect *mode*) (str "expected iselect mode, got " *mode*))
+        (is= "" (iselect/current-input))))
+    (cleanup tmp-dir)))
+
 (deftest regit-reset-status-context-hard-resets-to-commit-at-point-test
   (let [tmp-dir (init-reset-test-repo "regit-reset-status-context")
         target (short-hash tmp-dir "HEAD~1")]

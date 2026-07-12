@@ -266,7 +266,7 @@
       "Reset branch:"
       (fn [_input] branches)
       (fn [_entry] nil)
-      {:initial-input (current-branch root)
+      {:initial-input ""
        :complete-fn #'iselect/complete-to-first-and-select
        :submit-fn (fn [input selected-entry]
                     (let [branch (selected-value input selected-entry)]
