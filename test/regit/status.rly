@@ -1338,6 +1338,9 @@
               (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
                              (buffer/line-to-char lock file-line))
                 false status-window)
+              ;; The discard must delete the path directly, without relying on
+              ;; the diff captured when the status buffer was rendered.
+              (write-file untracked "changed after status render\n")
               (status/regit-discard)
               (let [mb-win (minibuffer-window)]
                 (test/assert mb-win "minibuffer-window not opened for discard confirmation")
@@ -1345,6 +1348,8 @@
                   (binding [*buffer* mb-buf
                             *window* mb-win]
                     (simple-prompt/simple-prompt-append-char "y"))))
+              (test/assert (not (path-exists? untracked))
+                "Discarding an untracked entry should delete the file")
               (let [text (with-read-lock [lock (buffer-text status-buffer)]
                            (buffer/slice lock 0 (buffer/len-chars lock)))]
                 (test/assert (not (str/includes? text "scratch.txt"))

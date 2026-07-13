@@ -621,14 +621,16 @@
              (git-cmd-checked! root "git add -u" "add" "-u" "--" (:path entry))
              (git-stage-entry root entry))
     :unstage (git-unstage-entry root entry)
-    :discard (if (conflict-entry? entry)
-               (if-let [stage (:conflict-stage opts)]
-                 (checkout-conflict-stage! root entry stage)
-                 (throw (ex-info "Choose ours, theirs, or conflict to discard an unmerged file" {})))
-               (let [patch (entry-full-patch entry)]
-                 (case section
-                   :staged (git-discard-patch root patch)
-                   (git-revert-patch root patch))))
+    :discard (if (= section :untracked)
+               (delete-file (path-join root (:path entry)))
+               (if (conflict-entry? entry)
+                 (if-let [stage (:conflict-stage opts)]
+                   (checkout-conflict-stage! root entry stage)
+                   (throw (ex-info "Choose ours, theirs, or conflict to discard an unmerged file" {})))
+                 (let [patch (entry-full-patch entry)]
+                   (case section
+                     :staged (git-discard-patch root patch)
+                     (git-revert-patch root patch)))))
     nil))
 
 (defn- perform-patch-operation! [root section operation entry patch & [opts]]
