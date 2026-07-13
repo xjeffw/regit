@@ -363,7 +363,7 @@
 
 (defn- find-stashes-buffer [root]
   (let [name (stashes-buffer-name root)]
-    (first (filter #(= (:name %) name) (list-buffers)))))
+    (find-if #(= (:name %) name) (list-buffers))))
 
 (defn- render-stashes-buffer! [buffer root]
   (let [stashes (git-stashes root)

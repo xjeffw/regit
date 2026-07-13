@@ -152,8 +152,8 @@
                   first-preview (regit-preview/wait-for-preview-buffer log-buffer first-target 4000)]
               (test/assert first-preview "First commit preview buffer was not displayed")
               (is= log-window (focused-window))
-              (let [first-preview-window (first (filter #(= (:id (window-buffer %)) (:id first-preview))
-                                                  (frame-normal-windows)))]
+              (let [first-preview-window (find-if #(= (:id (window-buffer %)) (:id first-preview))
+                                           (frame-normal-windows))]
                 (test/assert first-preview-window "First commit preview window not found")
                 (let [previous-hook regit-preview/*before-create-preview-buffer-hook*]
                   (set! regit-preview/*before-create-preview-buffer-hook*
@@ -172,8 +172,8 @@
                   (test/assert preview-buffer "Second commit preview buffer was not displayed")
                   (test/assert (regit-preview/wait-for-buffer-closed first-preview 500)
                     "First commit preview buffer was not closed after the second commit preview displayed")
-                  (let [preview-window (first (filter #(= (:id (window-buffer %)) (:id preview-buffer))
-                                                (frame-normal-windows)))]
+                  (let [preview-window (find-if #(= (:id (window-buffer %)) (:id preview-buffer))
+                                         (frame-normal-windows))]
                     (test/assert preview-window "Second commit preview window not found")
                     (test/assert (not= log-window preview-window) "Commit preview did not use another window")
                     (binding [*window* preview-window

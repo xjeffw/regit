@@ -78,7 +78,7 @@
 
 (defn find-status-buffer [root]
   (let [name (status-buffer-name root)]
-    (first (filter #(= (:name %) name) (list-buffers)))))
+    (find-if #(= (:name %) name) (list-buffers))))
 
 (defn- repo-name [root]
   (or (path-filename root) root))

@@ -145,7 +145,7 @@
 (defn- primary-remote [root]
   (let [remotes (remotes root)
         remote-set (set remotes)]
-    (or (first (filter #(contains? remote-set %) ["upstream" "origin"]))
+    (or (find-if #(contains? remote-set %) ["upstream" "origin"])
       (first remotes))))
 
 (defn- branch-remote [root branch]

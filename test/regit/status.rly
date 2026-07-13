@@ -137,9 +137,9 @@
           (set-string label)
           (let [spans (buffer/property-spans label-buffer)
                 span-at (fn [start end]
-                          (first (filter #(and (= start (:start %))
-                                            (= end (:end %)))
-                                   spans)))
+                          (find-if #(and (= start (:start %))
+                                      (= end (:end %)))
+                            spans))
                 repo-style (style->map (:properties (span-at prefix-length repo-end)))
                 slash-style (style->map (:properties (span-at repo-end slash-end)))
                 worktree-style (style->map (:properties (span-at slash-end worktree-end)))]
@@ -207,9 +207,9 @@
           (set-string (second labels))
           (let [spans (buffer/property-spans label-buffer)
                 span-at (fn [start end]
-                          (first (filter #(and (= start (:start %))
-                                            (= end (:end %)))
-                                   spans)))
+                          (find-if #(and (= start (:start %))
+                                      (= end (:end %)))
+                            spans))
                 repo-style (style->map (:properties (span-at 0 5)))
                 worktree-style (style->map (:properties (span-at 6 11)))]
             (is= (:fg (style->map (theme/style-for-face :regit-repo)))
@@ -535,8 +535,8 @@
                   commit-preview (wait-for-status-preview-buffer status-buffer status-window commit-target 4000)]
               (test/assert commit-preview "Commit preview buffer was not displayed")
               (is= status-window (focused-window))
-              (let [commit-preview-window (first (filter #(= (:id (window-buffer %)) (:id commit-preview))
-                                                   (frame-normal-windows)))]
+              (let [commit-preview-window (find-if #(= (:id (window-buffer %)) (:id commit-preview))
+                                            (frame-normal-windows))]
                 (test/assert commit-preview-window "Commit preview window not found")
                 (test/assert (not= status-window commit-preview-window) "Commit preview focused the status window")
                 (binding [*window* commit-preview-window
@@ -572,8 +572,8 @@
                     false status-window)
                   (let [preview-buffer (wait-for-status-preview-buffer status-buffer status-window stash-target 4000)]
                     (test/assert preview-buffer "Stash preview buffer was not displayed again")
-                    (let [preview-window (first (filter #(= (:id (window-buffer %)) (:id preview-buffer))
-                                                  (frame-normal-windows)))]
+                    (let [preview-window (find-if #(= (:id (window-buffer %)) (:id preview-buffer))
+                                           (frame-normal-windows))]
                       (test/assert preview-window "Stash preview window not found")
                       (status/regit-status-enter)
                       (is= preview-window (focused-window))
@@ -1244,8 +1244,8 @@
               (test/assert (= true (:read-only @(buffer-state ours-preview))) "our stage preview should be read-only")
               (test/assert (str/includes? (str (:label @(buffer-state ours-preview))) "our")
                 (str "our stage preview label should mention our. Got: " (:label @(buffer-state ours-preview))))
-              (let [preview-window (first (filter #(= (:id (window-buffer %)) (:id ours-preview))
-                                            (frame-normal-windows)))]
+              (let [preview-window (find-if #(= (:id (window-buffer %)) (:id ours-preview))
+                                     (frame-normal-windows))]
                 (test/assert preview-window "our stage preview window should be visible")
                 (test/assert (not= status-window preview-window) "our stage preview should use a secondary window"))
               (let [preview-text (with-read-lock [lock (buffer-text ours-preview)]

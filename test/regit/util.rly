@@ -138,8 +138,8 @@
     line))
 
 (defn window-for-buffer [buf]
-  (first (filter #(= (:id (window-buffer %)) (:id buf))
-           (frame-normal-windows))))
+  (find-if #(= (:id (window-buffer %)) (:id buf))
+    (frame-normal-windows)))
 
 (defn buffer-line-text [buf line]
   (with-read-lock [lock (buffer-text buf)]

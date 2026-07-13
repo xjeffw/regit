@@ -11,7 +11,7 @@
          buffer# (when root#
                    (let [root-str# (str root#)
                          name# (str "*regit-status: " (or (path-filename root-str#) root-str#) "*")]
-                     (first (filter (fn [candidate#] (= (:name candidate#) name#)) (list-buffers)))))]
+                     (find-if (fn [candidate#] (= (:name candidate#) name#)) (list-buffers))))]
      (if buffer#
        (if (buffer-pending? buffer#)
          (f#)

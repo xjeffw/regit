@@ -87,9 +87,8 @@
                 (let [root (:regit-root @(buffer-state status-buffer))
                       view-buffer (when root (view-commit/find-view-commit-buffer root commit-id))]
                   (test/assert view-buffer "regit-view-commit buffer not opened")
-                  (let [view-window (first
-                                      (filter #(= (:id (window-buffer %)) (:id view-buffer))
-                                        (frame-normal-windows)))]
+                  (let [view-window (find-if #(= (:id (window-buffer %)) (:id view-buffer))
+                                      (frame-normal-windows))]
                     (test/assert view-window "regit-view-commit window not opened")
                     (let [info (when root (git-commit-info root commit-id))]
                       (binding [*window* view-window

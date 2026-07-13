@@ -436,8 +436,8 @@
 
 (defn regit-diff-context-decoration-for-buffer [buffer]
   (when buffer
-    (first (filter #(= (:key %) :regit-diff-context)
-             (buffer-decorations buffer)))))
+    (find-if #(= (:key %) :regit-diff-context)
+      (buffer-decorations buffer))))
 
 (defn ensure-diff-context-decoration! [buffer]
   (when buffer
@@ -541,7 +541,7 @@
             others))))))
 
 (defn find-named-buffer [name]
-  (first (filter #(= (:name %) name) (list-buffers))))
+  (find-if #(= (:name %) name) (list-buffers)))
 
 (defn close-buffer-returning-to-window! []
   (let [state @(buffer-state)
