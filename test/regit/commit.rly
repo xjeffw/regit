@@ -79,6 +79,8 @@
       (assert-focused-regit-commit-message "regular commit")
       (test/assert (str/includes? (focused-buffer-name) "regit-commit-message")
         (str "regular commit should use regular commit message buffer label, got " (focused-buffer-name)))
+      (test/assert (str/starts-with? (focused-content) "\n\n")
+        (str "regular commit editor should start with an extra empty line. Got:\n" (focused-content)))
       (test/assert (str/includes? (focused-content) "# Please enter the commit message")
         (str "regular commit editor should contain git commit comments. Got:\n" (focused-content)))
       (assert-focused-commit-comments-dimmed "regular commit")

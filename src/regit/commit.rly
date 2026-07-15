@@ -131,6 +131,9 @@
   ("C-c C-c" #'finish-commit)
   ("C-c C-k" #'abort-commit))
 
+(defn- prepend-empty-line! [commit-buffer]
+  (buffer/replace-region 0 0 "\n" commit-buffer))
+
 (defn- open-staged-diff-for-commit-buffer! [root commit-buffer]
   (let [commit-window (focused-window)
         diff-buffer (regit-view-diff root)]
@@ -156,6 +159,7 @@
        :success-message (if amend? "Amended" "Committed")
        :abort-message "Aborted commit message edit"
        :on-open-editor (fn [buffer]
+                         (prepend-empty-line! buffer)
                          (open-staged-diff-for-commit-buffer! root buffer))})))
 
 (defn ^:interactive regit-commit []
