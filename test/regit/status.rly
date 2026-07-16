@@ -480,8 +480,10 @@
                            (buffer/line-to-char lock stash-line-idx))
               false status-window)
             (status/regit-status-enter)
-            (let [new-buffer (window-buffer status-window)]
-              (binding [*buffer* new-buffer]
+            (let [view-window (focused-window)
+                  view-buffer (window-buffer view-window)]
+              (binding [*window* view-window
+                        *buffer* view-buffer]
                 (is= :regit-view-stash *mode*)
                 (let [text (with-read-lock [lock (buffer-text)]
                              (buffer/slice lock 0 (buffer/len-chars lock)))]

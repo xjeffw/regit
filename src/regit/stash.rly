@@ -1,6 +1,7 @@
 (ns regit.stash
   (:require [regit.command :refer [regit-command]]
             [regit.diff :as regit-diff]
+            [regit.preview :as regit-preview]
             [regit.util :refer [git-cmd! with-status-buffer-pending]]
             [relay.ui.iselect :as iselect]
             [relay.ui.simple-prompt :as simple-prompt]
@@ -280,7 +281,9 @@
   (run-stash-operation! root (str "Dropped " stash-id)
     (fn [] (git-stash-drop root stash-id))))
 
-(defn- show-stash! [root stash-id]
+(defn- show-stash! [root stash-id & [source-buffer]]
+  (when source-buffer
+    (regit-preview/abort-preview! source-buffer))
   (view-stash/regit-view-stash stash-id root))
 
 (defn- slug-for-stash [root stash-id]
@@ -436,7 +439,7 @@
               (branch-stash-here! root stash-id branch)
               (branch-stash! root stash-id branch))))))))
 
-(defn- stash-actions [root context-stash-id]
+(defn- stash-actions [root context-stash-id source-buffer]
   {"z" {:label "both"
         :fn (fn [args] (prompt-stash-message :regit-stash-both root args :both))}
    "i" {:label "index"
@@ -462,7 +465,7 @@
    "l" {:label "List"
         :fn (fn [_args] (open-stashes-buffer! root))}
    "v" {:label "Show"
-        :fn (action-with-stash root context-stash-id "Show stash:" (fn [stash-id] (show-stash! root stash-id)))}
+        :fn (action-with-stash root context-stash-id "Show stash:" (fn [stash-id] (show-stash! root stash-id source-buffer)))}
    "b" {:label "Branch"
         :fn (branch-action root context-stash-id false)}
    "B" {:label "Branch here"
@@ -517,6 +520,6 @@
                      :value false
                      :incompatible ["u"]}}
          :return-window return-window
-         :actions (stash-actions root context-stash-id)
+         :actions (stash-actions root context-stash-id *buffer*)
          :layout (stash-layout)}))
     (message "Not in a git repository")))

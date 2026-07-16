@@ -36,18 +36,8 @@
   (or (get-git-output root "rev-parse" "--abbrev-ref" "HEAD")
     "unknown"))
 
-(defn- write-shell-script! [name content]
-  (let [path (temp-file-path name)]
-    (write-file path content)
-    path))
-
-(defn- temp-marker-path [name]
-  (let [path (temp-file-path name)]
-    (ignore-errors (delete-file path))
-    path))
-
-(defn- regit-editor-script []
-  (write-shell-script! "regit-commit-editor"
+(defn- regit-editor-script [path]
+  (write-file path
     (str "#!/bin/sh\n"
       "rm -f \"$REGIT_EDITOR_CONTINUE\" \"$REGIT_EDITOR_ABORT\"\n"
       "request_tmp=\"$REGIT_EDITOR_REQUEST.$$\"\n"
@@ -59,7 +49,8 @@
       "if [ -e \"$REGIT_EDITOR_ABORT\" ]; then\n"
       "  exit 1\n"
       "fi\n"
-      "rm -f \"$REGIT_EDITOR_REQUEST\" \"$REGIT_EDITOR_CONTINUE\"\n")))
+      "rm -f \"$REGIT_EDITOR_REQUEST\" \"$REGIT_EDITOR_CONTINUE\"\n"))
+  path)
 
 (defn- editor-command [script]
   (str "sh " script))
@@ -74,13 +65,15 @@
      "REGIT_EDITOR_ABORT" (:abort-path state)}))
 
 (defn- make-editor-state [root operation opts]
-  (let [script (regit-editor-script)]
+  (let [reservation-path (temp-file-path "regit-editor")
+        script (regit-editor-script (str reservation-path "-script"))]
     {:root root
      :operation operation
      :return-window (:return-window opts)
-     :request-path (temp-marker-path "regit-editor-request")
-     :continue-path (temp-marker-path "regit-editor-continue")
-     :abort-path (temp-marker-path "regit-editor-abort")
+     :reservation-path reservation-path
+     :request-path (str reservation-path "-request")
+     :continue-path (str reservation-path "-continue")
+     :abort-path (str reservation-path "-abort")
      :script script
      :active-buffer nil}))
 
@@ -88,7 +81,8 @@
   (doseq [path [(:request-path state)
                 (:continue-path state)
                 (:abort-path state)
-                (:script state)]]
+                (:script state)
+                (:reservation-path state)]]
     (when (and path (path-exists? path))
       (ignore-errors (delete-file path)))))
 
