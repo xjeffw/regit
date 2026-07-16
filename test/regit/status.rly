@@ -96,6 +96,34 @@
       (test/assert (path-exists? (path-join tmp-dir ".git" "MERGE_HEAD")) "MERGE_HEAD should exist")
       tmp-dir)))
 
+(defn- init-submodule-repos [name]
+  (let [submodule-root (temp-file-path (str name "-source"))
+        root (temp-file-path (str name "-superproject"))
+        submodule-path "deps/child"
+        submodule (str (path-join root submodule-path))]
+    (cleanup root submodule-root)
+    (doseq [repo [submodule-root root]]
+      (sh! "mkdir" [repo])
+      (git! repo "init")
+      (git! repo "config" "user.name" "Relay Test")
+      (git! repo "config" "user.email" "relay@example.com"))
+    (write-file (path-join submodule-root "child.txt") "base\n")
+    (git! submodule-root "add" "child.txt")
+    (git! submodule-root "commit" "-m" "base child commit")
+    (let [result (sh! "git"
+                   ["-c" "protocol.file.allow=always" "-C" root
+                    "submodule" "add" submodule-root submodule-path])]
+      (test/assert (zero? (:code result))
+        (str "git submodule add failed: " (:err result) (:out result))))
+    (git! root "commit" "-am" "add child submodule")
+    (git! submodule "config" "user.name" "Relay Test")
+    (git! submodule "config" "user.email" "relay@example.com")
+    {:root root
+     :submodule-root submodule-root
+     :submodule-path submodule-path
+     :submodule submodule
+     :child-file (path-join submodule "child.txt")}))
+
 (defn- unmerged-index [root]
   (get-git-output root "ls-files" "-u" "--" "conflict.txt"))
 
@@ -264,6 +292,7 @@
     (when start
       (let [end (or (find-line-index-after lines (inc start) #(or (str/includes? % "Unstaged changes")
                                                                 (str/includes? % "Staged changes")
+                                                                (str/includes? % "Submodules")
                                                                 (str/includes? % "Recent commits")))
                   (count lines))]
         [start end]))))
@@ -988,6 +1017,91 @@
             (test/assert (not (str/includes? content "untracked image.png")) "expected untracked files to render without a status prefix")
             (test/assert (not (str/includes? content "+after")) "diff content should not be rendered initially")))))
     (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-shows-modified-content-submodules-separately-and-opens-them-test
+  (let [{:keys [root submodule-root submodule child-file]}
+        (init-submodule-repos "regit-status-modified-content-submodule")
+        source-buffer (create-buffer true)]
+    (try
+      (write-file child-file "modified\n")
+      (binding [*buffer* source-buffer]
+        (status/regit-status root))
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                submodule-line (find-line-index lines
+                                 #(str/includes? (str %) "modified content deps/child"))]
+            (test/assert (some #(str/includes? (str %) "Submodules (1)") lines)
+              (str "expected Submodules section in " lines))
+            (test/assert (nil? (find-line-index lines
+                                 #(str/includes? (str %) "Unstaged changes")))
+              (str "modified-content-only submodule should not be unstaged: " lines))
+            (test/assert submodule-line
+              (str "expected modified content submodule entry in " lines))
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock submodule-line))
+              false status-window)
+            (status/regit-status-enter)))
+        (wait-for-focused-status submodule "open modified-content submodule"))
+      (finally
+        (doseq [repo [root submodule]]
+          (when-let [status-buffer (status/find-status-buffer repo)]
+            (kill-buffer status-buffer)))
+        (kill-buffer source-buffer)
+        (cleanup root submodule-root)))))
+
+(deftest regit-status-keeps-submodule-new-commits-in-unstaged-changes-test
+  (let [{:keys [root submodule-root submodule child-file]}
+        (init-submodule-repos "regit-status-new-commits-submodule")
+        source-buffer (create-buffer true)]
+    (try
+      (write-file child-file "committed\n")
+      (git! submodule "add" "child.txt")
+      (git! submodule "commit" "-m" "new child commit")
+      (binding [*buffer* source-buffer]
+        (status/regit-status root))
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)]
+            (test/assert (some #(str/includes? (str %) "Unstaged changes (1)") lines)
+              (str "new commits should be unstaged: " lines))
+            (test/assert (nil? (find-line-index lines #(str/includes? (str %) "Submodules")))
+              (str "new-commits-only submodule should not be in Submodules: " lines)))
+
+          (write-file child-file "committed and modified\n")
+          (status/regit-status root)
+          (let [lines (buffer-content-lines)
+                unstaged-range (get-section-range lines "Unstaged changes")
+                submodule-range (get-section-range lines "Submodules")
+                [unstaged-start unstaged-end] unstaged-range
+                [submodule-start submodule-end] submodule-range
+                unstaged-line (find-line-index-after lines (inc unstaged-start)
+                                #(str/includes? (str %) "deps/child"))
+                submodule-line (find-line-index-after lines (inc submodule-start)
+                                 #(str/includes? (str %) "modified content deps/child"))]
+            (test/assert (and unstaged-line (< unstaged-line unstaged-end))
+              (str "new commits should remain in Unstaged changes when content is modified: " lines))
+            (test/assert (and submodule-line (< submodule-line submodule-end))
+              (str "modified content should also appear in Submodules: " lines))
+            (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                           (buffer/line-to-char lock unstaged-line))
+              false status-window)
+            (status/regit-stage)
+            (let [lines (buffer-content-lines)
+                  staged-paths (get-git-output root "diff" "--cached" "--name-only" "--" "deps/child")]
+              (is= "deps/child" staged-paths)
+              (test/assert (some #(str/includes? (str %) "modified content deps/child") lines)
+                (str "staging new commits should retain modified content entry: " lines))))))
+      (finally
+        (doseq [repo [root submodule]]
+          (when-let [status-buffer (status/find-status-buffer repo)]
+            (kill-buffer status-buffer)))
+        (kill-buffer source-buffer)
+        (cleanup root submodule-root)))))
 
 (deftest regit-status-stage-and-unstage-file-entry-test
   (let [tmp-dir (temp-file-path "regit-stage-unstage-repo")

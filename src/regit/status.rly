@@ -215,6 +215,15 @@
 (defn- remove-conflict-paths [entries paths]
   (vec (remove #(contains? paths (:path %)) entries)))
 
+(defn- submodule-status? [entry status]
+  (some #(= % status) (:submodule-statuses entry)))
+
+(defn- modified-content-submodule? [entry]
+  (submodule-status? entry :modified-content))
+
+(defn- stageable-submodule? [entry]
+  (submodule-status? entry :new-commits))
+
 (defn- conflict-index? [entry]
   (not= (:index-status entry) " "))
 
@@ -256,7 +265,12 @@
                                        (remove-conflict-paths (:unstaged status) conflict-path-set)
                                        (filterv conflict-worktree? conflicts)))
         untracked (filterv #(= (:kind %) :untracked) unstaged-with-conflicts)
-        unstaged (filterv #(not= (:kind %) :untracked) unstaged-with-conflicts)
+        submodules (mapv #(assoc % :status-label "modified content")
+                     (filterv modified-content-submodule? unstaged-with-conflicts))
+        unstaged (filterv #(and (not= (:kind %) :untracked)
+                             (or (not (modified-content-submodule? %))
+                               (stageable-submodule? %)))
+                   unstaged-with-conflicts)
         upstream (:upstream status)
         unpulled-commits (or (:unpulled-commits status) [])
         unmerged-commits (or (:unmerged-commits status) [])
@@ -302,6 +316,17 @@
                                        {:text (:text step)
                                         :landmark [:rebase-step idx]}))
                         (:steps rebase-state)))
+          :initially-expanded? true}))
+     (when (seq submodules)
+       (make-node [:section :submodules]
+         {:text (regit-diff/header-text (str "Submodules (" (count submodules) ")"))
+          :landmark [:section :submodules]
+          :children (mapv (fn [e]
+                            (make-node [:submodule (:path e)]
+                              {:text (regit-diff/entry-header-line e)
+                               :landmark [:submodule (:path e)]
+                               :entry e}))
+                      submodules)
           :initially-expanded? true}))
      (when (seq untracked)
        (make-node [:section :untracked]
@@ -405,6 +430,7 @@
                          #{:heading
                            [:section :merge]
                            [:section :rebase]
+                           [:section :submodules]
                            [:section :unstaged]
                            [:section :staged]
                            [:section :untracked]
@@ -1118,12 +1144,14 @@
                     (let [result (call-var regit.view-stash/regit-view-stash stash-id)]
                       (regit-preview/abort-preview! buffer)
                       result))))
-              (if (and (vector? path)
-                    (not force-file?)
-                    (= (first path) :section)
-                    (or (= (second path) :unstaged) (= (second path) :staged)))
-                (call-var regit.view-diff/regit-view-diff (:regit-root buffer) (second path))
-                (if (and (vector? path) (or (= (first path) :file) (= (first path) :hunk)))
+              (if (and (vector? path) (= (first path) :submodule))
+                (regit-status (path-join (:regit-root buffer) (second path)))
+                (if (and (vector? path)
+                      (not force-file?)
+                      (= (first path) :section)
+                      (or (= (second path) :unstaged) (= (second path) :staged)))
+                  (call-var regit.view-diff/regit-view-diff (:regit-root buffer) (second path))
+                  (if (and (vector? path) (or (= (first path) :file) (= (first path) :hunk)))
                   (let [root (:regit-root buffer)
                         section (second path)
                         file-path (nth path 2)
@@ -1197,7 +1225,7 @@
                               (binding [*window* window
                                         *buffer* buffer]
                                 (recenter-scroll window))))))))
-                  (message "No regit action available at this line"))))))))))
+                    (message "No regit action available at this line")))))))))))
 
 (defn ^:interactive regit-status-enter []
   (jump-to-target-internal false))
