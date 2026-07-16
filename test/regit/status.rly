@@ -1094,6 +1094,8 @@
             (let [lines (buffer-content-lines)
                   staged-paths (get-git-output root "diff" "--cached" "--name-only" "--" "deps/child")]
               (is= "deps/child" staged-paths)
+              (test/assert (some #(str/includes? (str %) "Staged changes (1)") lines)
+                (str "staged submodule commit should appear in Staged changes: " lines))
               (test/assert (some #(str/includes? (str %) "modified content deps/child") lines)
                 (str "staging new commits should retain modified content entry: " lines))))))
       (finally
