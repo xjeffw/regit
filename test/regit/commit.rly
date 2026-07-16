@@ -18,6 +18,7 @@
             [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
             [relay.base.keys :as keys]
+            [relay.base.mode :as mode]
             [relay.string :as str]
             [relay.test :as test :refer [deftest is= is-error]]))
 
@@ -58,6 +59,7 @@
       (str context ": commit message buffer is not backed by intercepted git editor state"))
     (test/assert (:regit-commit-message-path state)
       (str context ": missing git commit message file path"))
+    (is= :handler (:regit-commit-message-editor-context state))
     buf))
 
 (defn- find-staged-diff-window [exclude-window]
@@ -85,10 +87,13 @@
         (str "regular commit editor should contain git commit comments. Got:\n" (focused-content)))
       (assert-focused-commit-comments-dimmed "regular commit")
       (is= 0 (cursor-position))
-      (let [finish-cmd (commit/commit-message-keymap (keys/parse-key-sequence "C-c C-c"))]
-        (test/assert (ifn? finish-cmd) "could not find C-c C-c binding"))
+      (binding [*buffer* (focused-buffer)]
+        (let [finish-cmd (commit/commit-message-keymap (keys/parse-key-sequence "C-c"))
+              abort-cmd (commit/commit-message-keymap (keys/parse-key-sequence "C-k"))]
+          (test/assert (ifn? finish-cmd) "could not find handler C-c binding")
+          (test/assert (ifn? abort-cmd) "could not find handler C-k binding")))
       (set-string "intercepted regular commit\n" (focused-buffer))
-      (send-keys "C-c C-c")
+      (send-keys "C-c")
       (test/wait-for [subject (head-subject tmp-dir)]
         :until (= "intercepted regular commit" subject)
         :timeout-message "regular commit editor submit did not create the edited commit")
@@ -104,6 +109,9 @@
       (open-file file-path)
       (open-status-commit-action! tmp-dir "a" "amend")
       (assert-focused-regit-commit-message "amend")
+      (test/assert (not (str/starts-with? (focused-content) "\n"))
+        (str "amend editor should not add an empty line before a non-empty message. Got:\n"
+          (focused-content)))
       (test/assert (str/includes? (focused-content) "initial")
         (str "amend editor should contain the existing commit message. Got:\n" (focused-content)))
       (assert-focused-commit-comments-dimmed "amend")
@@ -125,7 +133,8 @@
       (open-file file-path)
       (open-status-commit-action! tmp-dir "c" "staged diff")
       (let [msg-window (focused-window)
-            msg-buffer (focused-buffer)]
+            msg-buffer (focused-buffer)
+            message-path (:regit-commit-message-path @(buffer-state msg-buffer))]
         (assert-focused-regit-commit-message "staged diff")
         (let [diff-window (find-staged-diff-window msg-window)]
           (test/assert diff-window "regit-view-diff window not opened")
@@ -138,11 +147,99 @@
                 (test/assert (str/includes? text "Staged changes (1)")
                   (str "regit-view-diff buffer missing staged header. Got: " text))
                 (test/assert (str/includes? text "+line 1 changed")
-                  (str "regit-view-diff buffer missing staged diff. Got: " text)))))))
-      (send-keys "C-c C-k")
+                  (str "regit-view-diff buffer missing staged diff. Got: " text))))))
+        (send-keys "C-k")
+        (is= "" (read-file message-path)))
       (wait-for-message "Aborted commit message edit" "staged diff abort")
       (finally
         (cleanup tmp-dir)))))
+
+(deftest regit-commit-message-mode-activates-for-commit-editmsg-test
+  (let [root (temp-file-path "regit-commit-editmsg-mode")
+        path (path-join root "COMMIT_EDITMSG")]
+    (try
+      (sh! "rm" ["-rf" root])
+      (sh! "mkdir" [root])
+      (write-file path "\n# commit comment\n")
+      (let [buf (open-file path)]
+        (try
+          (binding [*buffer* buf]
+            (is= :regit-commit-message *mode*))
+          (finally
+            (kill-buffer buf))))
+      (finally
+        (cleanup root)))))
+
+(deftest regit-commit-message-mode-git-editor-environment-detection-test
+  (is= true
+    (commit/git-editor-environment?
+      (fn [name] (get {"GIT_PREFIX" ""} name))))
+  (is= false
+    (commit/git-editor-environment?
+      (fn [name] (get {} name)))))
+
+(deftest regit-commit-message-mode-keeps-normal-single-key-behavior-test
+  (let [buf (create-buffer true)]
+    (try
+      (set-window-buffer buf)
+      (binding [*buffer* buf]
+        (mode/activate-mode :regit-commit-message)
+        (is= :prefix
+          (commit/commit-message-keymap (keys/parse-key-sequence "C-c")))
+        (is= nil
+          (commit/commit-message-keymap (keys/parse-key-sequence "C-k"))))
+      (finally
+        (kill-buffer buf)))))
+
+(defn- external-git-editor-buffer [root content]
+  (let [path (path-join root "COMMIT_EDITMSG")
+        buf (create-buffer-for-new-file path)]
+    (set-window-buffer buf)
+    (set-string content buf)
+    (swap! (buffer-state buf) assoc
+      :regit-commit-message-editor-context :git-editor-app)
+    (binding [*buffer* buf]
+      (mode/activate-mode :regit-commit-message)
+      ;; The test injects the Git environment context after creating the file buffer.
+      ;; A real Git-launched app has this context when automatic mode activation runs.
+      (commit/initialize-commit-message-mode!))
+    buf))
+
+(deftest regit-commit-message-mode-submits-external-git-editor-app-test
+  (let [root (temp-file-path "regit-external-git-editor-submit")]
+    (try
+      (sh! "rm" ["-rf" root])
+      (sh! "mkdir" [root])
+      (let [buf (external-git-editor-buffer root "\n# commit comment\n")
+            path (:file buf)]
+        (binding [*buffer* buf]
+          (test/assert (str/starts-with? (buffer-content buf) "\n\n")
+            (str "external git editor should add one empty line. Got:\n" (buffer-content buf)))
+          (assert-focused-commit-comments-dimmed "external git editor")
+          (test/assert
+            (ifn? (commit/commit-message-keymap (keys/parse-key-sequence "C-c")))
+            "external git editor is missing C-c binding")
+          (set-string "external editor commit\n" buf)
+          (commit/finish-commit))
+        (is= "external editor commit\n" (read-file path)))
+      (finally
+        (cleanup root)))))
+
+(deftest regit-commit-message-mode-aborts-external-git-editor-app-test
+  (let [root (temp-file-path "regit-external-git-editor-abort")]
+    (try
+      (sh! "rm" ["-rf" root])
+      (sh! "mkdir" [root])
+      (let [buf (external-git-editor-buffer root "message to discard\n")
+            path (:file buf)]
+        (binding [*buffer* buf]
+          (test/assert
+            (ifn? (commit/commit-message-keymap (keys/parse-key-sequence "C-k")))
+            "external git editor is missing C-k binding")
+          (commit/abort-commit))
+        (is= "" (read-file path)))
+      (finally
+        (cleanup root)))))
 
 (deftest regit-commit-kills-staged-diff-after-submit-test
   (let [tmp-dir (init-commit-test-repo "regit-commit-kills-staged-diff-after-submit")

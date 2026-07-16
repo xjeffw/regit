@@ -68,17 +68,68 @@
     (with-read-lock [lock (buffer-text buf)]
       (buffer/slice lock 0 (buffer/len-chars lock)))))
 
+(defn- git-editor-environment?
+  ([] (git-editor-environment? getenv))
+  ([getenv-fn]
+   (some? (getenv-fn "GIT_PREFIX"))))
+
+(defn- commit-message-path [buffer state]
+  (or (:regit-commit-message-path state) (:file buffer)))
+
+(defn- commit-edit-message-path? [path]
+  (= "COMMIT_EDITMSG" (some-> path str path-filename str)))
+
+(defn- commit-message-editor-context [buffer state]
+  (or (:regit-commit-message-editor-context state)
+    (when (:regit-commit-editor-state state)
+      :handler)
+    (when (and (commit-edit-message-path? (commit-message-path buffer state))
+            (git-editor-environment?))
+      :git-editor-app)))
+
+(defn- commit-message-editor-context? [state]
+  (some? (:regit-commit-message-editor-context state)))
+
+(defn- empty-first-line? [buffer]
+  (contains? #{"" "\n" "\r\n"}
+    (str/strip-properties (or (buffer/first-line buffer) ""))))
+
+(defn- initialize-commit-message-mode! []
+  (let [commit-buffer *buffer*
+        state @(buffer-state commit-buffer)
+        context (commit-message-editor-context commit-buffer state)]
+    (when context
+      (swap! (buffer-state commit-buffer) assoc
+        :regit-commit-message-editor-context context)
+      (when-not (:regit-commit-message-mode-initialized state)
+        (when (= :git-editor-app context)
+          (set-string
+            (regit-util/render-commit-message-content
+              (buffer-string commit-buffer))
+            commit-buffer))
+        (when (and (commit-edit-message-path?
+                     (commit-message-path commit-buffer state))
+                (empty-first-line? commit-buffer))
+          (buffer/replace-region 0 0 "\n" commit-buffer))
+        (swap! (buffer-state commit-buffer) assoc
+          :regit-commit-message-mode-initialized true)))))
+
 (declare finish-commit abort-commit)
 
+(def commit-message-handler-keymap (make-keymap))
 (def commit-message-static-keymap (make-keymap))
 
 (defn- commit-message-keymap [key-seq]
-  (keys/lookup-keymap commit-message-static-keymap key-seq))
+  (or (when (commit-message-editor-context? @(buffer-state *buffer*))
+        (keys/lookup-keymap commit-message-handler-keymap key-seq))
+    (keys/lookup-keymap commit-message-static-keymap key-seq)))
 
 (register-mode :regit-commit-message
   {:name :regit-commit-message
+   :filename-regexp #"^COMMIT_EDITMSG$"
    :keymaps [#'commit-message-keymap]
-   :submodes [:vim]})
+   :submodes [:vim]
+   :on-activate #'initialize-commit-message-mode!})
 
 (defn- kill-associated-view-diff-buffer! [commit-buffer]
   (let [state @(buffer-state commit-buffer)
@@ -95,6 +146,9 @@
 (defn- editor-backed-commit-message? [state]
   (:regit-commit-editor-state state))
 
+(defn- git-editor-app-commit-message? [state]
+  (= :git-editor-app (:regit-commit-message-editor-context state)))
+
 (defn- finish-git-editor-commit-message! [buffer state]
   (let [state-atom (:regit-commit-editor-state state)
         editor-state @state-atom
@@ -108,21 +162,40 @@
 
 (defn finish-commit []
   (let [state @(buffer-state *buffer*)]
-    (if (editor-backed-commit-message? state)
+    (cond
+      (editor-backed-commit-message? state)
       (finish-git-editor-commit-message! *buffer* state)
+
+      (git-editor-app-commit-message? state)
+      (do
+        (save-file *buffer*)
+        (kill-relay))
+
+      :else
       (message "No git commit editor is active"))))
 
 (defn ^:interactive abort-commit []
   (let [buffer *buffer*
         state @(buffer-state buffer)]
-    (if (editor-backed-commit-message? state)
+    (cond
+      (editor-backed-commit-message? state)
       (let [state-atom (:regit-commit-editor-state state)
             editor-state @state-atom
+            message-path (:regit-commit-message-path state)
             return-window (:return-window editor-state)]
+        (write-file message-path "")
         (write-file (:abort-path editor-state) "")
         (swap! state-atom assoc :active-buffer nil)
         (kill-associated-view-diff-buffer! buffer)
         (close-commit-buffer! buffer return-window))
+
+      (git-editor-app-commit-message? state)
+      (do
+        (set-string "" buffer)
+        (save-file buffer)
+        (kill-relay 1))
+
+      :else
       (do
         (kill-associated-view-diff-buffer! buffer)
         (close-buffer)))))
@@ -131,8 +204,9 @@
   ("C-c C-c" #'finish-commit)
   ("C-c C-k" #'abort-commit))
 
-(defn- prepend-empty-line! [commit-buffer]
-  (buffer/replace-region 0 0 "\n" commit-buffer))
+(map! :map commit-message-handler-keymap
+  ("C-c" #'finish-commit)
+  ("C-k" #'abort-commit))
 
 (defn- open-staged-diff-for-commit-buffer! [root commit-buffer]
   (let [commit-window (focused-window)
@@ -159,7 +233,6 @@
        :success-message (if amend? "Amended" "Committed")
        :abort-message "Aborted commit message edit"
        :on-open-editor (fn [buffer]
-                         (prepend-empty-line! buffer)
                          (open-staged-diff-for-commit-buffer! root buffer))})))
 
 (defn ^:interactive regit-commit []

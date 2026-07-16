@@ -138,8 +138,8 @@
       (set-focused-window window)
       (binding [*buffer* buffer
                 *window* window]
-        (activate-mode :regit-commit-message)
         (set-string (render-commit-message-content content) buffer)
+        (activate-mode :regit-commit-message)
         (move-cursor 0 false window)
         (set-scroll-offset 0 window)))
     (swap! state-atom assoc :active-buffer buffer)

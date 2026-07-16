@@ -518,7 +518,7 @@
       (str "rebase editor should contain original commit message. Got:\n" (focused-content)))
     (assert-focused-commit-comments-dimmed "continue rebase editor")
     (set-string "resolved rebase message\n" (focused-buffer))
-    (send-keys "C-c C-c")
+    (send-keys "C-c")
     (test/wait-for [state {:rebasing? (rebase/rebase-in-progress? tmp-dir)
                            :subject (first (log-subjects tmp-dir))}]
       :until (and (not (:rebasing? state)) (= "resolved rebase message" (:subject state)))
@@ -536,7 +536,7 @@
     (assert-focused-command "Continue" "in-progress rebase command before editor abort")
     (send-keys "r")
     (assert-focused-regit-commit "continue rebase editor before abort")
-    (send-keys "C-c C-k")
+    (send-keys "C-k")
     (wait-for-message "Aborted commit message edit" "continue rebase editor abort")
     (wait-for-focused-status tmp-dir "continue rebase editor aborted")
     (test/assert (rebase/rebase-in-progress? tmp-dir) "aborted editor should leave rebase in progress")
