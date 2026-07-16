@@ -205,8 +205,8 @@
   ("C-c C-k" #'abort-commit))
 
 (map! :map commit-message-handler-keymap
-  ("C-c" #'finish-commit)
-  ("C-k" #'abort-commit))
+  ("C-c C-c" #'finish-commit)
+  ("C-c C-k" #'abort-commit))
 
 (defn- open-staged-diff-for-commit-buffer! [root commit-buffer]
   (let [commit-window (focused-window)

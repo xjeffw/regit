@@ -88,12 +88,12 @@
       (assert-focused-commit-comments-dimmed "regular commit")
       (is= 0 (cursor-position))
       (binding [*buffer* (focused-buffer)]
-        (let [finish-cmd (commit/commit-message-keymap (keys/parse-key-sequence "C-c"))
-              abort-cmd (commit/commit-message-keymap (keys/parse-key-sequence "C-k"))]
-          (test/assert (ifn? finish-cmd) "could not find handler C-c binding")
-          (test/assert (ifn? abort-cmd) "could not find handler C-k binding")))
+        (let [finish-cmd (commit/commit-message-keymap (keys/parse-key-sequence "C-c C-c"))
+              abort-cmd (commit/commit-message-keymap (keys/parse-key-sequence "C-c C-k"))]
+          (test/assert (ifn? finish-cmd) "could not find handler C-c C-c binding")
+          (test/assert (ifn? abort-cmd) "could not find handler C-c C-k binding")))
       (set-string "intercepted regular commit\n" (focused-buffer))
-      (send-keys "C-c")
+      (send-keys "C-c C-c")
       (test/wait-for [subject (head-subject tmp-dir)]
         :until (= "intercepted regular commit" subject)
         :timeout-message "regular commit editor submit did not create the edited commit")
@@ -148,7 +148,7 @@
                   (str "regit-view-diff buffer missing staged header. Got: " text))
                 (test/assert (str/includes? text "+line 1 changed")
                   (str "regit-view-diff buffer missing staged diff. Got: " text))))))
-        (send-keys "C-k")
+        (send-keys "C-c C-k")
         (is= "" (read-file message-path)))
       (wait-for-message "Aborted commit message edit" "staged diff abort")
       (finally
@@ -217,8 +217,8 @@
             (str "external git editor should add one empty line. Got:\n" (buffer-content buf)))
           (assert-focused-commit-comments-dimmed "external git editor")
           (test/assert
-            (ifn? (commit/commit-message-keymap (keys/parse-key-sequence "C-c")))
-            "external git editor is missing C-c binding")
+            (ifn? (commit/commit-message-keymap (keys/parse-key-sequence "C-c C-c")))
+            "external git editor is missing C-c C-c binding")
           (set-string "external editor commit\n" buf)
           (commit/finish-commit))
         (is= "external editor commit\n" (read-file path)))
@@ -234,8 +234,8 @@
             path (:file buf)]
         (binding [*buffer* buf]
           (test/assert
-            (ifn? (commit/commit-message-keymap (keys/parse-key-sequence "C-k")))
-            "external git editor is missing C-k binding")
+            (ifn? (commit/commit-message-keymap (keys/parse-key-sequence "C-c C-k")))
+            "external git editor is missing C-c C-k binding")
           (commit/abort-commit))
         (is= "" (read-file path)))
       (finally
