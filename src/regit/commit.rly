@@ -193,7 +193,9 @@
       (do
         (set-string "" buffer)
         (save-file buffer)
-        (kill-relay 1))
+        ;; Git treats a nonzero editor status as an editor failure. Exit
+        ;; successfully and let the empty message signal the abort instead.
+        (kill-relay 0))
 
       :else
       (do
