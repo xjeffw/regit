@@ -261,7 +261,7 @@
   (count (render-state-layout-lines state)))
 
 (defn- render-command-buffer-for-state [state-atom]
-  (frame/with-render-coalescing-if-needed
+  (frame/with-render-coalescing
     (let [{:keys [ui-buffer] :as state} @state-atom]
       (when ui-buffer
         (let [content (str/join "\n"
@@ -273,7 +273,7 @@
   (render-command-buffer-for-state *state*))
 
 (defn- restore-command-buffer! [state-atom]
-  (frame/with-render-coalescing-if-needed
+  (frame/with-render-coalescing
     (let [{:keys [ui-buffer] :as state} @state-atom
           ui-window (minibuffer-ui-window)]
       (when (and ui-buffer ui-window)
@@ -415,7 +415,7 @@
         ui-window (minibuffer-ui-window)]
     (when ui-window
       (let [return-window (or return-window (focused-window))]
-        (frame/with-render-coalescing-if-needed
+        (frame/with-render-coalescing
           (set-window-buffer ui-buffer ui-window)
           (set-minibuffer-height 0)
           (set-minibuffer-ui-height (command-layout-height

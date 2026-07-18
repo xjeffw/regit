@@ -74,7 +74,7 @@
       [])))
 
 (defn- git-config-set! [root key value]
-  (frame/with-render-coalescing-if-needed
+  (frame/with-render-coalescing
     (let [args ["config" key value]
           result (apply git-cmd! root args)
           err (git-command-error args result)]
@@ -83,7 +83,7 @@
       err)))
 
 (defn- git-config-add! [root key value]
-  (frame/with-render-coalescing-if-needed
+  (frame/with-render-coalescing
     (let [args ["config" "--add" key value]
           result (apply git-cmd! root args)
           err (git-command-error args result)]
@@ -92,7 +92,7 @@
       err)))
 
 (defn- git-config-unset! [root key]
-  (frame/with-render-coalescing-if-needed
+  (frame/with-render-coalescing
     (let [args ["config" "--unset" key]
           result (apply git-cmd! root args)]
       (if (= 5 (:code result))
@@ -103,7 +103,7 @@
           err)))))
 
 (defn- git-config-unset-all! [root key]
-  (frame/with-render-coalescing-if-needed
+  (frame/with-render-coalescing
     (let [args ["config" "--unset-all" key]
           result (apply git-cmd! root args)]
       (if (= 5 (:code result))
@@ -253,7 +253,7 @@
                   (reopen-fn))}))
 
 (defn- cycle-and-reopen! [root key choices reopen-fn]
-  (frame/with-render-coalescing-if-needed
+  (frame/with-render-coalescing
     (when-let [err (cycle-config-choice! root key choices)]
       (message err))
     (reopen-fn)))
