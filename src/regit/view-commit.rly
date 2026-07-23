@@ -1,16 +1,12 @@
 (ns regit.view-commit
   (:require [relay.base.mode :as mode]
-            [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
-            [relay.base.hook :refer [add-hook!]]
-            [relay.base.window :as window]
             [relay.base.keys :as keys :refer [make-keymap map!]]
-            [relay.base.project :as project]
             [relay.ui.outline :as outline]
             [relay.string :as str]
             [relay.base.theme :as theme]
             [regit.diff :as regit-diff]
-            [relay.util :as util])
+            [regit.util :refer [regit-icon]])
   (:use relay.core relay.builtins))
 
 (defn- make-file-entry-items [entry]
@@ -318,6 +314,6 @@
 
 (mode/register-mode :regit-view-commit
   {:name :regit-view-commit
-   :icon "󰊢 "
+   :icon regit-icon
    :keymaps regit-view-commit-keymaps
    :submodes [:outline :vim]})

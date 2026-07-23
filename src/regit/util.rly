@@ -5,6 +5,8 @@
             [relay.string :as str])
   (:use relay.core relay.builtins))
 
+(defonce regit-icon "󰊢")
+
 (defmacro with-status-buffer-pending [root & body]
   `(let [root# ~root
          f# (fn [] ~@body)

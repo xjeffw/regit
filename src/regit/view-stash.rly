@@ -1,18 +1,12 @@
 (ns regit.view-stash
   (:require [relay.base.mode :as mode]
-            [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
-            [relay.base.hook :refer [add-hook!]]
-            [relay.base.window :as window]
             [relay.base.keys :as keys :refer [make-keymap map!]]
-            [relay.base.project :as project]
             [relay.ui.outline :as outline]
             [relay.string :as str]
             [relay.base.theme :as theme]
             [regit.diff :as regit-diff]
-            [regit.util :refer [with-status-buffer-pending]]
-            [relay.util :as util]
-            [regit.command :as regit-command])
+            [regit.util :refer [with-status-buffer-pending regit-icon]])
   (:use relay.core relay.builtins))
 
 (declare configure-view-stash-buffer!)
@@ -339,6 +333,6 @@
 
 (mode/register-mode :regit-view-stash
   {:name :regit-view-stash
-   :icon "󰊢 "
+   :icon regit-icon
    :keymaps regit-view-stash-keymaps
    :submodes [:outline :vim]})

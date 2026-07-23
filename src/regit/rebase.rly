@@ -1,7 +1,7 @@
 (ns regit.rebase
   (:require [regit.command :as regit-command :refer [regit-command]]
             [regit.log-select :as log-select]
-            [regit.util :as regit-util :refer [git-cmd! with-status-buffer-pending]]
+            [regit.util :as regit-util :refer [git-cmd! with-status-buffer-pending regit-icon]]
             [relay.ui.iselect :as iselect]
             [relay.ui.simple-prompt :as simple-prompt]
             [relay.base.hook :refer [run-hooks]]
@@ -703,7 +703,7 @@
 
 (register-mode :git-rebase-todo
   {:name :git-rebase-todo
-   :icon "󰊢 "
+   :icon regit-icon
    :vars {#'mode/*language* "bash"}
    :keymaps [git-rebase-todo-keymap]
    :submodes [:vim]})

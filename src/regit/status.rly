@@ -7,7 +7,7 @@
             [relay.base.keys :as keys :refer [make-keymap map!]]
             [relay.ui.simple-prompt :as simple-prompt]
             [relay.ui.iselect :as iselect]
-            [regit.util :refer [git-cmd! with-status-buffer-pending]]
+            [regit.util :refer [git-cmd! with-status-buffer-pending regit-icon]]
             [regit.push :refer [regit-push]]
             [regit.fetch :refer [regit-fetch]]
             [regit.pull :refer [regit-pull]]
@@ -1152,79 +1152,79 @@
                       (or (= (second path) :unstaged) (= (second path) :staged)))
                   (call-var regit.view-diff/regit-view-diff (:regit-root buffer) (second path))
                   (if (and (vector? path) (or (= (first path) :file) (= (first path) :hunk)))
-                  (let [root (:regit-root buffer)
-                        section (second path)
-                        file-path (nth path 2)
-                        full-path (path-join root file-path)
-                        type (first path)]
-                    (if (and (= type :file) (not force-file?))
-                      (let [buffer (open-file full-path)]
-                        (when buffer
-                          (let [window (focused-window)]
-                            (set-window-buffer buffer window)
-                            (binding [*window* window
-                                      *buffer* buffer]
-                              (recenter-scroll window)))))
-                  ;; Jump into diff (or real file if force-file? is true)
-                      (let [hunk-id (if (= type :file) nil (nth path 3))
-                            line-offset (if (= type :file) 0 (nth path 4 0))
-                            entry (:entry item)
-                            diff (or (:diff entry) "")
-                            lines (str/split-lines diff)
-                            {:keys [preamble hunks]} (regit-diff/split-diff-hunks lines)
-                            hunk (when hunk-id
-                                   (some (fn [h]
-                                           (let [h-info (regit-diff/parse-hunk-header (first h))
-                                                 h-id (regit-diff/hunk-stable-id section h-info)]
-                                             (when (= h-id hunk-id) h)))
-                                     hunks))
-                            parsed-header (if hunk
-                                            (regit-diff/parse-hunk-header (first hunk))
-                                            {:old-start 1 :new-start 1})
-                            dest-info (let [line-text (str/triml (:text item))]
-                                        (if (or force-file? (= type :file))
-                                          {:file full-path :type :new :start (:new-start parsed-header)}
-                                          (cond
-                                            (str/starts-with? line-text "-")
-                                            (if (= section :staged)
-                                              {:file (or (:old-path entry) file-path) :ref "HEAD" :name (str "*staged-base: " (or (:old-path entry) file-path) "*") :type :old :start (:old-start parsed-header)}
-                                              {:file file-path :ref "" :name (str "*staged: " file-path "*") :type :old :start (:old-start parsed-header)})
-
-                                            (str/starts-with? line-text "+")
-                                            (if (= section :staged)
-                                              {:file file-path :ref "" :name (str "*staged: " file-path "*") :type :new :start (:new-start parsed-header)}
-                                              {:file full-path :type :new :start (:new-start parsed-header)})
-
-                                            :else
-                                            {:file full-path :type :new :start (:new-start parsed-header)})))
-                            buffer (if (:ref dest-info)
-                                     (open-synthetic-file! root (:file dest-info) (:ref dest-info) (:name dest-info))
-                                     (open-file (:file dest-info)))]
-                        (when buffer
-                          (let [start-line (:start dest-info)
-                                hunk-type (:type dest-info)
-                                offset-count (if hunk
-                                               (loop [i 1
-                                                      c 0]
-                                                 (if (>= i (or line-offset 0))
-                                                   c
-                                                   (let [l (nth hunk i)
-                                                         is-inc? (if (= hunk-type :new)
-                                                                   (or (str/starts-with? l "+") (str/starts-with? l " "))
-                                                                   (or (str/starts-with? l "-") (str/starts-with? l " ")))]
-                                                     (recur (inc i) (if is-inc? (inc c) c)))))
-                                               0)
-                                jump-line (+ (dec (or start-line 1)) offset-count)
-                                window (focused-window)]
-                            (set-window-buffer buffer window)
-                            (let [last-line (max 0 (dec (buffer-lines buffer)))
-                                  target-line (min jump-line last-line)
-                                  pos (with-read-lock [lock (buffer-text buffer)]
-                                        (relay.base.buffer/line-to-char lock target-line))]
-                              (move-cursor pos false window)
+                    (let [root (:regit-root buffer)
+                          section (second path)
+                          file-path (nth path 2)
+                          full-path (path-join root file-path)
+                          type (first path)]
+                      (if (and (= type :file) (not force-file?))
+                        (let [buffer (open-file full-path)]
+                          (when buffer
+                            (let [window (focused-window)]
+                              (set-window-buffer buffer window)
                               (binding [*window* window
                                         *buffer* buffer]
-                                (recenter-scroll window))))))))
+                                (recenter-scroll window)))))
+                  ;; Jump into diff (or real file if force-file? is true)
+                        (let [hunk-id (if (= type :file) nil (nth path 3))
+                              line-offset (if (= type :file) 0 (nth path 4 0))
+                              entry (:entry item)
+                              diff (or (:diff entry) "")
+                              lines (str/split-lines diff)
+                              {:keys [preamble hunks]} (regit-diff/split-diff-hunks lines)
+                              hunk (when hunk-id
+                                     (some (fn [h]
+                                             (let [h-info (regit-diff/parse-hunk-header (first h))
+                                                   h-id (regit-diff/hunk-stable-id section h-info)]
+                                               (when (= h-id hunk-id) h)))
+                                       hunks))
+                              parsed-header (if hunk
+                                              (regit-diff/parse-hunk-header (first hunk))
+                                              {:old-start 1 :new-start 1})
+                              dest-info (let [line-text (str/triml (:text item))]
+                                          (if (or force-file? (= type :file))
+                                            {:file full-path :type :new :start (:new-start parsed-header)}
+                                            (cond
+                                              (str/starts-with? line-text "-")
+                                              (if (= section :staged)
+                                                {:file (or (:old-path entry) file-path) :ref "HEAD" :name (str "*staged-base: " (or (:old-path entry) file-path) "*") :type :old :start (:old-start parsed-header)}
+                                                {:file file-path :ref "" :name (str "*staged: " file-path "*") :type :old :start (:old-start parsed-header)})
+
+                                              (str/starts-with? line-text "+")
+                                              (if (= section :staged)
+                                                {:file file-path :ref "" :name (str "*staged: " file-path "*") :type :new :start (:new-start parsed-header)}
+                                                {:file full-path :type :new :start (:new-start parsed-header)})
+
+                                              :else
+                                              {:file full-path :type :new :start (:new-start parsed-header)})))
+                              buffer (if (:ref dest-info)
+                                       (open-synthetic-file! root (:file dest-info) (:ref dest-info) (:name dest-info))
+                                       (open-file (:file dest-info)))]
+                          (when buffer
+                            (let [start-line (:start dest-info)
+                                  hunk-type (:type dest-info)
+                                  offset-count (if hunk
+                                                 (loop [i 1
+                                                        c 0]
+                                                   (if (>= i (or line-offset 0))
+                                                     c
+                                                     (let [l (nth hunk i)
+                                                           is-inc? (if (= hunk-type :new)
+                                                                     (or (str/starts-with? l "+") (str/starts-with? l " "))
+                                                                     (or (str/starts-with? l "-") (str/starts-with? l " ")))]
+                                                       (recur (inc i) (if is-inc? (inc c) c)))))
+                                                 0)
+                                  jump-line (+ (dec (or start-line 1)) offset-count)
+                                  window (focused-window)]
+                              (set-window-buffer buffer window)
+                              (let [last-line (max 0 (dec (buffer-lines buffer)))
+                                    target-line (min jump-line last-line)
+                                    pos (with-read-lock [lock (buffer-text buffer)]
+                                          (relay.base.buffer/line-to-char lock target-line))]
+                                (move-cursor pos false window)
+                                (binding [*window* window
+                                          *buffer* buffer]
+                                  (recenter-scroll window))))))))
                     (message "No regit action available at this line")))))))))))
 
 (defn ^:interactive regit-status-enter []
@@ -1446,6 +1446,6 @@
 
 (mode/register-mode :regit-status
   {:name :regit-status
-   :icon "󰊢 "
+   :icon regit-icon
    :keymaps regit-status-keymaps
    :submodes [:outline :vim]})

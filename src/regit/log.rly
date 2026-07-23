@@ -8,7 +8,7 @@
             [regit.command :as regit-command]
             [regit.preview :as regit-preview]
             [regit.reset :refer [regit-reset]]
-            [regit.util :refer [git-cmd!]]
+            [regit.util :refer [git-cmd! regit-icon]]
             [regit.view-commit :refer [regit-view-commit]]
             [relay.base.project :as project]
             [relay.ui.hl-line]
@@ -246,7 +246,7 @@
 
 (mode/register-mode :regit-log
   {:name :regit-log
-   :icon "󰊢 "
+   :icon regit-icon
    :keymaps regit-log-keymaps
    :submodes [:hl-line :vim]})
 

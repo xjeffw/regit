@@ -1,5 +1,5 @@
 (ns regit.log-select
-  (:require [regit.util :refer [git-cmd!]]
+  (:require [regit.util :refer [git-cmd! regit-icon]]
             [relay.base.mode :as mode]
             [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
@@ -163,7 +163,7 @@
 
 (mode/register-mode :regit-log-select
   {:name :regit-log-select
-   :icon "󰊢 "
+   :icon regit-icon
    :keymaps [regit-log-select-keymap]
    :submodes [:hl-line :vim]})
 

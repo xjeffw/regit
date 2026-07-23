@@ -1,15 +1,11 @@
 (ns regit.view-diff
   (:require [relay.base.mode :as mode]
-            [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
-            [relay.base.window :as window]
             [relay.base.keys :as keys :refer [make-keymap map!]]
-            [relay.base.project :as project]
             [relay.ui.outline :as outline]
             [relay.string :as str]
-            [relay.base.theme :as theme]
             [regit.diff :as regit-diff]
-            [relay.util :as util])
+            [regit.util :refer [regit-icon]])
   (:use relay.core relay.builtins))
 
 (defn- repo-name [root]
@@ -229,6 +225,6 @@
 
 (mode/register-mode :regit-view-diff
   {:name :regit-view-diff
-   :icon "󰊢 "
+   :icon regit-icon
    :keymaps regit-view-diff-keymaps
    :submodes [:outline :vim]})

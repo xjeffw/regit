@@ -1,6 +1,6 @@
 (ns regit.merge
   (:require [regit.command :as regit-command :refer [regit-command]]
-            [regit.util :as regit-util :refer [git-cmd! with-status-buffer-pending]]
+            [regit.util :as regit-util :refer [git-cmd! with-status-buffer-pending regit-icon]]
             [relay.ui.iselect :as iselect]
             [relay.base.hook :refer [run-hooks]]
             [relay.base.keys :refer [make-keymap map!]]
@@ -363,7 +363,7 @@
 
 (register-mode :regit-merge-preview
   {:name :regit-merge-preview
-   :icon "󰊢 "
+   :icon regit-icon
    :keymaps [#'merge-preview-keymap]
    :submodes [:vim]})
 
