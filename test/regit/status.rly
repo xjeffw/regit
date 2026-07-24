@@ -221,6 +221,9 @@
             entries (:entries state)
             render-fn (:render-fn state)
             labels (mapv render-fn entries)]
+        (is= true
+          (mode/global-mode-active? :worktree-layout))
+        (is= "Select project worktree:" (:prompt state))
         (is= [(str (path-canonicalize root))
               (str (path-canonicalize work1))
               (str (path-canonicalize work2))]
@@ -246,9 +249,15 @@
               (:fg worktree-style)))))
       (enter-iselect-character! "2")
       (wait-for-focused-status work1 "numeric recent-project worktree selection")
+      (is= (str (path-canonicalize work1))
+        @project/recent-project-root)
       (invoke-status-key! "w")
+      (is= "Select project worktree:"
+        (:prompt (iselect-state)))
       (enter-iselect-character! "3")
       (wait-for-focused-status work2 "numeric current-project worktree selection")
+      (is= (str (path-canonicalize work2))
+        @project/recent-project-root)
       (finally
         (doseq [worktree [root work1 work2]]
           (when-let [status-buffer (status/find-status-buffer worktree)]

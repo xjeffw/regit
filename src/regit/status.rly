@@ -7,6 +7,7 @@
             [relay.base.keys :as keys :refer [make-keymap map!]]
             [relay.ui.simple-prompt :as simple-prompt]
             [relay.ui.iselect :as iselect]
+            [relay.ui.panels.project :as project-panel]
             [regit.util :refer [git-cmd! with-status-buffer-pending regit-icon]]
             [regit.push :refer [regit-push]]
             [regit.fetch :refer [regit-fetch]]
@@ -1312,14 +1313,18 @@
   (iselect/select-worktree prompt root action))
 
 (defn ^:interactive regit-status-worktree []
-  (select-worktree
-    "Status worktree:"
-    (project/current-project-root)
-    (fn [worktree]
-      (let [root (:path worktree)]
-        (if project/auto-current-worktree
-          (regit-status root)
-          (project/set-current-worktree! root))))))
+  (if (mode/global-mode-active? :worktree-layout)
+    (project-panel/project-select-worktree
+      (fn [root]
+        (regit-status root)))
+    (select-worktree
+      "Status worktree:"
+      (project/current-project-root)
+      (fn [worktree]
+        (let [root (:path worktree)]
+          (if project/auto-current-worktree
+            (regit-status root)
+            (project/set-current-worktree! root)))))))
 
 (def regit-status-commands
   {"s" {:label "stage" :fn #'regit-stage}
