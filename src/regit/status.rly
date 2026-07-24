@@ -5,6 +5,7 @@
             [relay.base.hook :refer [add-hook! run-hooks]]
             [relay.base.window :as window]
             [relay.base.keys :as keys :refer [make-keymap map!]]
+            [relay.layout :as layout]
             [relay.ui.simple-prompt :as simple-prompt]
             [relay.ui.iselect :as iselect]
             [relay.ui.panels.project :as project-panel]
@@ -1240,10 +1241,16 @@
         existing (find-status-buffer root)
         buffer (or existing (create-buffer true))
         label (status-buffer-label root)
+        focused (focused-window)
+        target-frame (or *frame* (some-> focused window-frame))
+        normal-windows (when target-frame
+                         (frame-normal-windows target-frame))
         existing-window (when existing
                           (some (fn [w] (when (= (window-buffer w) existing) w))
-                            (frame-windows)))
-        window (or existing-window (focused-window))]
+                            normal-windows))
+        window (or existing-window
+                 (layout/preferred-normal-window target-frame)
+                 focused)]
     (with-status-buffer-pending (when existing root)
       (frame/with-render-coalescing
         (when-not existing

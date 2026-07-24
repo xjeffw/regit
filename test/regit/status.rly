@@ -15,6 +15,7 @@
             [relay.base.mode :as mode]
             [relay.base.project :as project]
             [relay.base.theme :as theme]
+            [relay.layout :as layout]
             [regit.command :as regit-command]
             [regit.diff :as regit-diff]
             [regit.preview :as regit-preview]
@@ -187,6 +188,52 @@
   (is= #'status/regit-status-worktree
     (keys/lookup-keymap keys/default-keymap
       (keys/parse-key-sequence "<space> g w"))))
+
+(deftest regit-status-worktree-opens-in-normal-layout-from-left-panel-test
+  (let [root (temp-file-path "regit-status-worktree-left-panel")
+        source-buffer (create-buffer true)
+        left-buffer (create-buffer true)
+        previous-left-view layout/current-left-panel-view
+        previous-recent-root @project/recent-project-root
+        previous-recent-buffer @project/recent-project-buffer]
+    (try
+      (cleanup root)
+      (sh! "mkdir" [root])
+      (git! root "init")
+      (git! root "config" "user.name" "Relay Test")
+      (git! root "config" "user.email" "relay@example.com")
+      (git! root "commit" "--allow-empty" "-m" "initial")
+      (let [root (str (path-canonicalize root))]
+        (project/set-current-worktree! root)
+        (let [normal-window (first (frame-normal-windows))
+              target-frame (window-frame normal-window)]
+          (set-window-buffer source-buffer normal-window)
+          (when-let [initial-status (status/find-status-buffer root)]
+            (kill-buffer initial-status))
+          (let [left-window
+                (layout/open-left-panel! left-buffer target-frame)]
+            (set-focused-window left-window)
+            (binding [*window* left-window
+                      *buffer* left-buffer]
+              (status/regit-status-worktree))
+            (enter-iselect-character! "1")
+            (wait-for-focused-status root
+              "left-panel worktree selection")
+            (is= left-buffer (window-buffer left-window))
+            (is= (status/find-status-buffer root)
+              (window-buffer normal-window)))))
+      (finally
+        (layout/close-left-panel!)
+        (layout/set-left-panel-view! previous-left-view)
+        (doseq [candidate [source-buffer left-buffer]]
+          (when (some #(= (:id candidate) (:id %))
+                  (list-buffers))
+            (kill-buffer candidate)))
+        (when-let [status-buffer (status/find-status-buffer root)]
+          (kill-buffer status-buffer))
+        (reset! project/recent-project-root previous-recent-root)
+        (reset! project/recent-project-buffer previous-recent-buffer)
+        (cleanup root)))))
 
 (deftest regit-status-worktree-selects-current-or-recent-repository-worktree-test
   (let [parent (temp-file-path "regit-status-worktree-select")
