@@ -1305,44 +1305,21 @@
     (open-status-buffer! root focus?)
     (message "No git project found for the current buffer")))
 
-(defn- status-worktree-label [repository-name index worktree]
-  (str
-    (theme/with-face repository-name :regit-repo)
-    (when (pos? index)
-      (str
-        (theme/with-face "/" :default)
-        (theme/with-face (repo-name (:path worktree)) :regit-worktree)))))
+(defn status-worktree-label [repository-name index worktree]
+  (iselect/worktree-label repository-name index worktree))
 
-(defn- status-worktree-action [worktree]
-  (when worktree
-    (fn []
-      (regit-status (:path worktree)))))
+(defn select-worktree [prompt root action]
+  (iselect/select-worktree prompt root action))
 
 (defn ^:interactive regit-status-worktree []
-  (if-let [root (project/current-project-root)]
-    (let [worktrees (git-worktrees root)
-          repository-name (some-> worktrees first :path repo-name)
-          choices (vec
-                    (map-indexed
-                      (fn [index worktree]
-                        (assoc worktree :label
-                          (status-worktree-label repository-name index worktree)))
-                      worktrees))]
-      (if (seq choices)
-        (iselect/iselect "Status worktree:"
-          (fn [_input] choices)
-          status-worktree-action
-          {:render-fn (fn [worktree] (:label worktree))
-           :autosubmit #"[1-9]"
-           :submit-fn (fn [input selected-worktree]
-                        (let [number (keys/digit-from-string input)
-                              worktree (if number
-                                         (nth choices (dec number) nil)
-                                         selected-worktree)]
-                          (or (status-worktree-action worktree)
-                            :keep-open)))})
-        (message "No git worktrees found")))
-    (message "No git project found for the current buffer")))
+  (select-worktree
+    "Status worktree:"
+    (project/current-project-root)
+    (fn [worktree]
+      (let [root (:path worktree)]
+        (if project/auto-current-worktree
+          (regit-status root)
+          (project/set-current-worktree! root))))))
 
 (def regit-status-commands
   {"s" {:label "stage" :fn #'regit-stage}
