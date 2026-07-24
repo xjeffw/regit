@@ -204,6 +204,7 @@
       (git! root "config" "user.email" "relay@example.com")
       (git! root "commit" "--allow-empty" "-m" "initial")
       (let [root (str (path-canonicalize root))]
+        (swap! (buffer-state source-buffer) assoc :project-root root)
         (project/set-current-worktree! root)
         (let [normal-window (first (frame-normal-windows))
               target-frame (window-frame normal-window)]
