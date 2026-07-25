@@ -217,7 +217,7 @@
             (binding [*window* left-window
                       *buffer* left-buffer]
               (status/regit-status-worktree))
-            (enter-iselect-character! "1")
+            (enter-iselect-character! "0")
             (wait-for-focused-status root
               "left-panel worktree selection")
             (is= left-buffer (window-buffer left-window))
@@ -278,10 +278,11 @@
           (mapv :path entries))
         (is= ["relay" "relay/work1" "relay/work2"]
           (mapv str/strip-properties labels))
-        (test/assert (re-matches (:autosubmit state) "1")
-          "worktree selector should autosubmit digits 1 through 9")
-        (test/assert (not (re-matches (:autosubmit state) "0"))
-          "worktree selector should not autosubmit zero")
+        (test/assert (re-matches (:autosubmit state) "0")
+          "worktree selector should autosubmit zero")
+        (test/assert (re-matches (:autosubmit state) "9")
+          "worktree selector should autosubmit digits through nine")
+        (is= 0 (:entry-position-base state))
         (binding [*buffer* label-buffer]
           (set-string (second labels))
           (let [spans (buffer/property-spans label-buffer)
@@ -295,14 +296,14 @@
               (:fg repo-style))
             (is= (:fg (style->map (theme/style-for-face :regit-worktree)))
               (:fg worktree-style)))))
-      (enter-iselect-character! "2")
+      (enter-iselect-character! "1")
       (wait-for-focused-status work1 "numeric recent-project worktree selection")
       (is= (str (path-canonicalize work1))
         @project/recent-project-root)
       (invoke-status-key! "w")
       (is= "Select project worktree:"
         (:prompt (iselect-state)))
-      (enter-iselect-character! "3")
+      (enter-iselect-character! "2")
       (wait-for-focused-status work2 "numeric current-project worktree selection")
       (is= (str (path-canonicalize work2))
         @project/recent-project-root)
