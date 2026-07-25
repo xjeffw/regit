@@ -2,6 +2,7 @@
   (:require [relay.base.mode :as mode]
             [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
+            [relay.base.git :as git]
             [relay.base.hook :refer [add-hook! run-hooks]]
             [relay.base.window :as window]
             [relay.base.keys :as keys :refer [make-keymap map!]]
@@ -468,14 +469,19 @@
 
 (defn- rerender-status-buffer! [& [preferred-path]]
   (when-let [root (:regit-root *buffer*)]
-    (let [window (or *window* (focused-window))
-          buffer *buffer*
+    (let [buffer *buffer*
+          window (or (when (and *window*
+                             (= (:id (window-buffer *window*)) (:id buffer)))
+                       *window*)
+                   (first (buffer-windows buffer)))
           state @(buffer-state buffer)
           landmarks (or (:landmarks state) [])
-          cursor-line (current-line)
-          cursor-path (or preferred-path (outline/find-landmark-at-line landmarks cursor-line))
-          scroll (scroll-offset window)
-          h-scroll (horizontal-scroll-offset window)]
+          cursor-line (when window (current-line buffer))
+          cursor-path (when window
+                        (or preferred-path
+                          (outline/find-landmark-at-line landmarks cursor-line)))
+          scroll (when window (scroll-offset window))
+          h-scroll (when window (horizontal-scroll-offset window))]
       (frame/with-render-coalescing
         (render-status-buffer! buffer root)
         (when window
@@ -494,6 +500,30 @@
             (ensure-scroll-offset window)
             (ensure-horizontal-scroll-offset window)))
         (outline/update-outline-hint-highlight!)))))
+
+(defn- regit-status-buffer? [candidate]
+  (and (:regit-root candidate)
+    (binding [*buffer* candidate]
+      (= *mode* :regit-status))))
+
+(defn- refresh-project-status-buffers! [root]
+  (when-let [repo-root (project/repo-root-for-project-root root)]
+    (let [status-buffers
+          (filter
+            (fn [candidate]
+              (and (regit-status-buffer? candidate)
+                (= repo-root
+                  (project/repo-root-for-project-root
+                    (:regit-root candidate)))))
+            (list-buffers))]
+      (when (seq status-buffers)
+        (git-clear-repo-cache)
+        (doseq [status-buffer status-buffers]
+          (let [status-window (first (buffer-windows status-buffer))]
+            (binding [*buffer* status-buffer
+                      *window* status-window]
+              (with-status-buffer-pending (:regit-root status-buffer)
+                (rerender-status-buffer!)))))))))
 
 (defn- preview-target [kind root id]
   [kind (str root) id])
@@ -1426,6 +1456,10 @@
 
 (def regit-status-keymaps
   [regit-status-keymap])
+
+(add-hook! [git/on-git-repo-change refresh-regit-status-on-git-repo-change-hook]
+  [root]
+  (refresh-project-status-buffers! root))
 
 (add-hook! [window/on-window-cursor-moved regit-status-preview-cursor-moved-hook] []
   (when (and (= *mode* :regit-status)

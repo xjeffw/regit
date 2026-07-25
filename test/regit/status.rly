@@ -11,6 +11,8 @@
                                       wait-for-focused-status]]
             [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
+            [relay.base.git :as git]
+            [relay.base.hook :as hook]
             [relay.base.keys :as keys]
             [relay.base.mode :as mode]
             [relay.base.project :as project]
@@ -1797,6 +1799,133 @@
                       (test/assert (not (some #(str/includes? (str %) "+a modified") lines))
                         "Discard failed to remove change"))))))))))
     (sh! "rm" ["-rf" tmp-dir])))
+
+(deftest regit-status-refreshes-on-git-repo-change-test
+  (let [root (temp-file-path "regit-status-git-change-refresh")
+        alpha-path (path-join root "alpha.txt")
+        target-path (path-join root "target.txt")]
+    (try
+      (cleanup root)
+      (sh! "mkdir" [root])
+      (git! root "init")
+      (git! root "config" "user.name" "Relay Test")
+      (git! root "config" "user.email" "relay@example.com")
+      (write-file alpha-path "alpha base\n")
+      (write-file target-path "target base\n")
+      (git! root "add" ".")
+      (git! root "commit" "-m" "initial")
+      (write-file target-path "target before notification\n")
+
+      (status/regit-status root)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [target-file-line
+                (find-line-index
+                  (buffer-content-lines)
+                  #(str/includes? (str %) "modified target.txt"))]
+            (test/assert target-file-line "target.txt status entry not found")
+            (move-cursor
+              (with-read-lock [lock (buffer-text status-buffer)]
+                (buffer/line-to-char lock target-file-line))
+              false
+              status-window)
+            (outline/toggle-fold)
+            (let [target-content-line
+                  (find-line-index
+                    (buffer-content-lines)
+                    #(str/includes? (str %) "+target before notification"))]
+              (test/assert target-content-line "expanded target.txt content not found")
+              (move-cursor
+                (with-read-lock [lock (buffer-text status-buffer)]
+                  (buffer/line-to-char lock target-content-line))
+                false
+                status-window)
+              (let [cursor-path
+                    (:id
+                      (get
+                        (:line-to-item @(buffer-state status-buffer))
+                        (current-line status-buffer)))]
+                (write-file alpha-path "alpha after notification\n")
+                (write-file target-path "target after notification\n")
+                (hook/run-hooks git/on-git-repo-change root)
+
+                (let [lines (buffer-content-lines)
+                      current-item
+                      (get
+                        (:line-to-item @(buffer-state status-buffer))
+                        (current-line status-buffer))]
+                  (test/assert
+                    (some #(str/includes? (str %) "modified alpha.txt") lines)
+                    "Git notification did not add alpha.txt to regit status")
+                  (test/assert
+                    (some #(str/includes? (str %) "+target after notification") lines)
+                    "Git notification did not refresh expanded target.txt content")
+                  (test/assert
+                    (not
+                      (some
+                        #(str/includes? (str %) "+target before notification")
+                        lines))
+                    "Git notification left stale target.txt content")
+                  (is= cursor-path (:id current-item))))))))
+      (finally
+        (cleanup root)))))
+
+(deftest regit-status-git-change-does-not-create-buffer-test
+  (let [root (temp-file-path "regit-status-git-change-no-buffer")]
+    (try
+      (cleanup root)
+      (sh! "mkdir" [root])
+      (git! root "init")
+      (git! root "config" "user.name" "Relay Test")
+      (git! root "config" "user.email" "relay@example.com")
+      (git! root "commit" "--allow-empty" "-m" "initial")
+      (is= nil (status/find-status-buffer root))
+      (hook/run-hooks git/on-git-repo-change root)
+      (is= nil (status/find-status-buffer root))
+      (finally
+        (cleanup root)))))
+
+(deftest regit-status-refreshes-linked-worktree-on-repo-change-test
+  (let [parent (temp-file-path "regit-status-linked-git-change-refresh")
+        root (path-join parent "main")
+        worktree (path-join parent "linked")
+        tracked-path (path-join worktree "tracked.txt")]
+    (try
+      (cleanup parent)
+      (sh! "mkdir" [parent])
+      (sh! "mkdir" [(str root)])
+      (git! root "init")
+      (git! root "config" "user.name" "Relay Test")
+      (git! root "config" "user.email" "relay@example.com")
+      (write-file (path-join root "tracked.txt") "base\n")
+      (git! root "add" "tracked.txt")
+      (git! root "commit" "-m" "initial")
+      (git! root "worktree" "add" "-b" "linked" (str worktree))
+
+      (status/regit-status worktree)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)]
+        (binding [*buffer* status-buffer
+                  *window* status-window]
+          (test/assert
+            (not
+              (some
+                #(str/includes? (str %) "modified tracked.txt")
+                (buffer-content-lines)))
+            "linked worktree status should start clean")
+          (write-file tracked-path "changed\n")
+          ;; The repository monitor reports the main worktree root for changes in
+          ;; any linked worktree.
+          (hook/run-hooks git/on-git-repo-change root)
+          (test/assert
+            (some
+              #(str/includes? (str %) "modified tracked.txt")
+              (buffer-content-lines))
+            "main repository notification did not refresh linked worktree status")))
+      (finally
+        (cleanup parent)))))
 
 (deftest regit-status-hint-highlight-test
   (let [tmp-dir (temp-file-path "regit-hint-test-repo")
