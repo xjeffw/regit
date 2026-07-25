@@ -207,6 +207,7 @@
       (git! root "commit" "--allow-empty" "-m" "initial")
       (let [root (str (path-canonicalize root))]
         (swap! (buffer-state source-buffer) assoc :project-root root)
+        (layout/configure-left-panel-buffer! left-buffer)
         (project/set-current-worktree! root)
         (let [normal-window (first (frame-normal-windows))
               target-frame (window-frame normal-window)]
