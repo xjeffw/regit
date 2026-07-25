@@ -1887,6 +1887,32 @@
       (finally
         (cleanup root)))))
 
+(deftest regit-status-git-change-refresh-does-not-retrigger-monitor-test
+  (let [root (temp-file-path "regit-status-git-change-no-loop")
+        calls (atom [])
+        hook-key ::git-change-no-loop]
+    (try
+      (cleanup root)
+      (sh! "mkdir" [root])
+      (git! root "init")
+      (git! root "config" "user.name" "Relay Test")
+      (git! root "config" "user.email" "relay@example.com")
+      (git! root "commit" "--allow-empty" "-m" "initial")
+      (status/regit-status root)
+      (hook/add-hook! git/on-git-repo-change hook-key
+        (fn [changed-root]
+          (swap! calls conj (str changed-root))))
+      (git-monitor-repo root)
+
+      (hook/run-hooks git/on-git-repo-change root)
+      (sleep (ms->duration 500))
+
+      (is= [(str root)] @calls)
+      (finally
+        (ignore-errors (git-unmonitor-repo root))
+        (hook/remove-hook! git/on-git-repo-change hook-key)
+        (cleanup root)))))
+
 (deftest regit-status-refreshes-linked-worktree-on-repo-change-test
   (let [parent (temp-file-path "regit-status-linked-git-change-refresh")
         root (path-join parent "main")
