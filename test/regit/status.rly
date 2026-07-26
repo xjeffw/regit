@@ -180,7 +180,6 @@
               (:fg slash-style))
             (is= (theme/color-hex :maroon) (:fg worktree-style)))))
       (finally
-        (kill-buffer label-buffer)
         (sh! "rm" ["-rf" parent])))))
 
 (deftest regit-status-worktree-keybindings-test
@@ -194,10 +193,7 @@
 (deftest regit-status-worktree-opens-in-normal-layout-from-left-panel-test
   (let [root (temp-file-path "regit-status-worktree-left-panel")
         source-buffer (create-buffer true)
-        left-buffer (create-buffer true)
-        previous-left-view layout/current-left-panel-view
-        previous-recent-root @project/recent-project-root
-        previous-recent-buffer @project/recent-project-buffer]
+        left-buffer (create-buffer true)]
     (try
       (cleanup root)
       (sh! "mkdir" [root])
@@ -227,16 +223,6 @@
             (is= (status/find-status-buffer root)
               (window-buffer normal-window)))))
       (finally
-        (layout/close-left-panel!)
-        (layout/set-left-panel-view! previous-left-view)
-        (doseq [candidate [source-buffer left-buffer]]
-          (when (some #(= (:id candidate) (:id %))
-                  (list-buffers))
-            (kill-buffer candidate)))
-        (when-let [status-buffer (status/find-status-buffer root)]
-          (kill-buffer status-buffer))
-        (reset! project/recent-project-root previous-recent-root)
-        (reset! project/recent-project-buffer previous-recent-buffer)
         (cleanup root)))))
 
 (deftest regit-status-worktree-selects-current-or-recent-repository-worktree-test
@@ -245,9 +231,7 @@
         work1 (path-join parent "work1")
         work2 (path-join parent "work2")
         source-buffer (create-buffer true)
-        label-buffer (create-buffer true)
-        previous-recent-root @project/recent-project-root
-        previous-recent-buffer @project/recent-project-buffer]
+        label-buffer (create-buffer true)]
     (try
       (cleanup parent)
       (sh! "mkdir" [parent])
@@ -311,13 +295,6 @@
       (is= (str (path-canonicalize work2))
         @project/recent-project-root)
       (finally
-        (doseq [worktree [root work1 work2]]
-          (when-let [status-buffer (status/find-status-buffer worktree)]
-            (kill-buffer status-buffer)))
-        (kill-buffer label-buffer)
-        (kill-buffer source-buffer)
-        (reset! project/recent-project-root previous-recent-root)
-        (reset! project/recent-project-buffer previous-recent-buffer)
         (cleanup parent)))))
 
 (defn- find-cached-node [old-tree id]
@@ -641,15 +618,13 @@
                 (let [previous-hook regit-preview/*before-create-preview-buffer-hook*]
                   (set! regit-preview/*before-create-preview-buffer-hook*
                     (fn [] (sleep (ms->duration 150))))
-                  (try
-                    (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
-                                   (buffer/line-to-char lock stash-line))
-                      false status-window)
-                    (test/assert (some #(= (:id %) (:id commit-preview)) (list-buffers))
-                      "Commit preview buffer was closed before the replacement preview was ready")
-                    (is= commit-preview (window-buffer commit-preview-window))
-                    (finally
-                      (set! regit-preview/*before-create-preview-buffer-hook* previous-hook))))
+                  (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
+                                 (buffer/line-to-char lock stash-line))
+                    false status-window)
+                  (test/assert (some #(= (:id %) (:id commit-preview)) (list-buffers))
+                    "Commit preview buffer was closed before the replacement preview was ready")
+                  (is= commit-preview (window-buffer commit-preview-window))
+                  (set! regit-preview/*before-create-preview-buffer-hook* previous-hook))
                 (let [stash-target (status/preview-target-at-line stash-line)
                       stash-preview (wait-for-status-preview-buffer status-buffer status-window stash-target 4000)]
                   (test/assert stash-preview "Stash preview buffer was not displayed")
@@ -696,8 +671,7 @@
         _ (write-file file-path "preview disabled\n")
         _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
         _ (sh! "git" ["-C" tmp-dir "commit" "-m" "disabled status preview commit"])
-        status-buffer (create-buffer)
-        previous-preview-on-focus regit-preview/regit-preview-on-focus]
+        status-buffer (create-buffer)]
     (delete-other-windows)
     (set! regit-preview/regit-preview-on-focus false)
     (try
@@ -721,7 +695,6 @@
               (test/assert (not (some #(:regit-preview? @(buffer-state %)) (list-buffers)))
                 "Status preview buffer was created while regit-preview-on-focus was false")))))
       (finally
-        (set! regit-preview/regit-preview-on-focus previous-preview-on-focus)
         (sh! "rm" ["-rf" tmp-dir])))))
 
 (deftest regit-status-apply-stash-test
@@ -1107,10 +1080,6 @@
             (status/regit-status-enter)))
         (wait-for-focused-status submodule "open modified-content submodule"))
       (finally
-        (doseq [repo [root submodule]]
-          (when-let [status-buffer (status/find-status-buffer repo)]
-            (kill-buffer status-buffer)))
-        (kill-buffer source-buffer)
         (cleanup root submodule-root)))))
 
 (deftest regit-status-keeps-submodule-new-commits-in-unstaged-changes-test
@@ -1160,10 +1129,6 @@
               (test/assert (some #(str/includes? (str %) "modified content deps/child") lines)
                 (str "staging new commits should retain modified content entry: " lines))))))
       (finally
-        (doseq [repo [root submodule]]
-          (when-let [status-buffer (status/find-status-buffer repo)]
-            (kill-buffer status-buffer)))
-        (kill-buffer source-buffer)
         (cleanup root submodule-root)))))
 
 (deftest regit-status-stage-and-unstage-file-entry-test
@@ -1495,15 +1460,13 @@
         _ (sh! "git" ["-C" tmp-dir "config" "user.name" "Relay Test"])
         _ (sh! "git" ["-C" tmp-dir "config" "user.email" "relay@example.com"])
         tracked (path-join tmp-dir "tracked.txt")
-        untracked (path-join tmp-dir "scratch.txt")
-        opened-buffer (atom nil)]
+        untracked (path-join tmp-dir "scratch.txt")]
     (try
       (write-file tracked "tracked\n")
       (sh! "git" ["-C" tmp-dir "add" "tracked.txt"])
       (sh! "git" ["-C" tmp-dir "commit" "-m" "initial commit"])
       (write-file untracked "scratch\n")
       (let [file-buffer (open-file untracked)]
-        (reset! opened-buffer file-buffer)
         (binding [*buffer* file-buffer]
           (mode/enable-submode :diff-hl))
         (status/regit-status tmp-dir)
@@ -1534,10 +1497,6 @@
                 (test/assert (not (str/includes? text "scratch.txt"))
                   (str "Status buffer still included discarded untracked file. Got: " text)))))))
       (finally
-        (when-let [buffer @opened-buffer]
-          (try
-            (kill-buffer buffer)
-            (catch exception e nil)))
         (sh! "rm" ["-rf" tmp-dir])))))
 
 (deftest regit-status-stage-and-unstage-hunk-from-content-line-test
@@ -1910,8 +1869,6 @@
 
       (is= [(str root)] @calls)
       (finally
-        (ignore-errors (git-unmonitor-repo root))
-        (hook/remove-hook! git/on-git-repo-change hook-key)
         (cleanup root)))))
 
 (deftest regit-status-refreshes-linked-worktree-on-repo-change-test

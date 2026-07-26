@@ -162,11 +162,8 @@
       (sh! "mkdir" [root])
       (write-file path "\n# commit comment\n")
       (let [buf (open-file path)]
-        (try
-          (binding [*buffer* buf]
-            (is= :regit-commit-message *mode*))
-          (finally
-            (kill-buffer buf))))
+        (binding [*buffer* buf]
+          (is= :regit-commit-message *mode*)))
       (finally
         (cleanup root)))))
 
@@ -180,16 +177,13 @@
 
 (deftest regit-commit-message-mode-keeps-normal-single-key-behavior-test
   (let [buf (create-buffer true)]
-    (try
-      (set-window-buffer buf)
-      (binding [*buffer* buf]
-        (mode/activate-mode :regit-commit-message)
-        (is= :prefix
-          (commit/commit-message-keymap (keys/parse-key-sequence "C-c")))
-        (is= nil
-          (commit/commit-message-keymap (keys/parse-key-sequence "C-k"))))
-      (finally
-        (kill-buffer buf)))))
+    (set-window-buffer buf)
+    (binding [*buffer* buf]
+      (mode/activate-mode :regit-commit-message)
+      (is= :prefix
+        (commit/commit-message-keymap (keys/parse-key-sequence "C-c")))
+      (is= nil
+        (commit/commit-message-keymap (keys/parse-key-sequence "C-k"))))))
 
 (defn- external-git-editor-buffer [root content]
   (let [path (path-join root "COMMIT_EDITMSG")

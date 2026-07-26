@@ -87,8 +87,7 @@
         _ (write-file file-path "preview disabled\n")
         _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
         _ (sh! "git" ["-C" tmp-dir "commit" "-m" "disabled log preview commit"])
-        seed-buffer (create-buffer)
-        previous-preview-on-focus regit-preview/regit-preview-on-focus]
+        seed-buffer (create-buffer)]
     (delete-other-windows)
     (set! regit-preview/regit-preview-on-focus false)
     (try
@@ -112,7 +111,6 @@
               (test/assert (not (some #(:regit-preview? @(buffer-state %)) (list-buffers)))
                 "Log preview buffer was created while regit-preview-on-focus was false")))))
       (finally
-        (set! regit-preview/regit-preview-on-focus previous-preview-on-focus)
         (sh! "rm" ["-rf" tmp-dir])))))
 
 (deftest regit-log-previews-commit-and-promotes-on-enter-test
@@ -158,15 +156,13 @@
                 (let [previous-hook regit-preview/*before-create-preview-buffer-hook*]
                   (set! regit-preview/*before-create-preview-buffer-hook*
                     (fn [] (sleep (ms->duration 150))))
-                  (try
-                    (move-cursor (with-read-lock [lock (buffer-text log-buffer)]
-                                   (buffer/line-to-char lock second-line))
-                      false log-window)
-                    (test/assert (some #(= (:id %) (:id first-preview)) (list-buffers))
-                      "First commit preview buffer was closed before the replacement preview was ready")
-                    (is= first-preview (window-buffer first-preview-window))
-                    (finally
-                      (set! regit-preview/*before-create-preview-buffer-hook* previous-hook))))
+                  (move-cursor (with-read-lock [lock (buffer-text log-buffer)]
+                                 (buffer/line-to-char lock second-line))
+                    false log-window)
+                  (test/assert (some #(= (:id %) (:id first-preview)) (list-buffers))
+                    "First commit preview buffer was closed before the replacement preview was ready")
+                  (is= first-preview (window-buffer first-preview-window))
+                  (set! regit-preview/*before-create-preview-buffer-hook* previous-hook))
                 (let [second-target (log/preview-target tmp-dir (log/commit-id-at-line second-line))
                       preview-buffer (regit-preview/wait-for-preview-buffer log-buffer second-target 4000)]
                   (test/assert preview-buffer "Second commit preview buffer was not displayed")
@@ -242,26 +238,22 @@
             (let [first-target (log/preview-target tmp-dir (log/commit-id-at-line first-line))
                   first-preview (regit-preview/wait-for-preview-buffer log-buffer first-target 4000)]
               (test/assert first-preview "First commit preview buffer was not displayed")
-              (let [previous-hook regit-preview/*after-set-preview-buffer-hook*
-                    third-target (log/preview-target tmp-dir (log/commit-id-at-line third-line))]
+              (let [third-target (log/preview-target tmp-dir (log/commit-id-at-line third-line))]
                 (set! regit-preview/*after-set-preview-buffer-hook*
                   (fn [preview-buffer _preview-window]
                     (reset! raced-preview preview-buffer)
                     (set! regit-preview/*after-set-preview-buffer-hook* nil)
                     (move-cursor (line-pos third-line) false log-window)))
-                (try
-                  (move-cursor (line-pos second-line) false log-window)
-                  (let [third-preview (regit-preview/wait-for-preview-buffer log-buffer third-target 4000)]
-                    (test/assert third-preview "Third commit preview buffer was not displayed")
-                    (test/assert @raced-preview "Race hook did not capture the losing preview buffer")
-                    (sleep (ms->duration 100))
-                    (test/assert (not (some #(= (:id %) (:id @raced-preview)) (list-buffers)))
-                      "Preview buffer that lost ownership after display was retained")
-                    (let [preview-buffers (filter #(:regit-preview? @(buffer-state %)) (list-buffers))]
-                      (is= 1 (count preview-buffers))
-                      (is= (:id third-preview) (:id (first preview-buffers)))))
-                  (finally
-                    (set! regit-preview/*after-set-preview-buffer-hook* previous-hook))))))))
+                (move-cursor (line-pos second-line) false log-window)
+                (let [third-preview (regit-preview/wait-for-preview-buffer log-buffer third-target 4000)]
+                  (test/assert third-preview "Third commit preview buffer was not displayed")
+                  (test/assert @raced-preview "Race hook did not capture the losing preview buffer")
+                  (sleep (ms->duration 100))
+                  (test/assert (not (some #(= (:id %) (:id @raced-preview)) (list-buffers)))
+                    "Preview buffer that lost ownership after display was retained")
+                  (let [preview-buffers (filter #(:regit-preview? @(buffer-state %)) (list-buffers))]
+                    (is= 1 (count preview-buffers))
+                    (is= (:id third-preview) (:id (first preview-buffers))))))))))
       (sh! "rm" ["-rf" tmp-dir]))))
 
 (deftest regit-log-cleans-registered-orphan-preview-buffers-test
@@ -337,8 +329,6 @@
         _ (sh! "git" ["-C" tmp-dir "add" "test.txt"])
         _ (sh! "git" ["-C" tmp-dir "commit" "-m" "second coalesced preview commit"])
         seed-buffer (create-buffer)
-        previous-delay regit-preview/regit-preview-delay-ms
-        previous-hook regit-preview/*before-create-preview-buffer-hook*
         create-count (atom 0)]
     (delete-other-windows)
     (set! regit-preview/regit-preview-delay-ms 75)
@@ -370,6 +360,4 @@
                 (is= 1 @create-count)
                 (is= second-preview (:buffer (regit-preview/active-preview log-buffer))))))))
       (finally
-        (set! regit-preview/regit-preview-delay-ms previous-delay)
-        (set! regit-preview/*before-create-preview-buffer-hook* previous-hook)
         (sh! "rm" ["-rf" tmp-dir])))))
