@@ -249,7 +249,7 @@
         (test/assert diff-buffer "commit message buffer missing associated regit-view-diff buffer")
         (set-string "commit that closes staged diff\n" msg-buffer)
         (send-keys "C-c C-c")
-        (test/assert (not (some #(= (:name %) diff-name) (list-buffers)))
+        (test/assert (not (some #(= (:name %) diff-name) (buffer/buffers)))
           "associated regit-view-diff buffer was not killed after submitting git commit message")
         (test/wait-for [subject (head-subject tmp-dir)]
           :until (= "commit that closes staged diff" subject)

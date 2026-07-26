@@ -83,7 +83,7 @@
 
 (defn- find-log-buffer [root target]
   (let [name (log-buffer-name root target)]
-    (find-if #(= (:name %) name) (list-buffers))))
+    (find-if #(= (:name %) name) (buffer/buffers))))
 
 (defn- parse-commits [rendered]
   (if (str/blank? rendered)

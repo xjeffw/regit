@@ -31,7 +31,7 @@
 (defn- buffer-listed? [buffer & [attempt]]
   (when buffer
     (try
-      (some #(= (:id %) (:id buffer)) (list-buffers))
+      (some #(= (:id %) (:id buffer)) (buffer/buffers))
       (catch exception _
         (if (< (or attempt 0) 3)
           (do
@@ -83,7 +83,7 @@
       ids)))
 
 (defn- cleanup-orphaned-preview-buffers! [source-buffer keep-preview]
-  (doseq [preview-buffer (list-buffers)]
+  (doseq [preview-buffer (buffer/buffers)]
     (let [state (ignore-errors @(buffer-state preview-buffer))]
       (when (and (:regit-preview? state)
               (same-buffer? source-buffer (:regit-preview-source-buffer state)))

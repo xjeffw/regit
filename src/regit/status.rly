@@ -81,7 +81,7 @@
 
 (defn find-status-buffer [root]
   (let [name (status-buffer-name root)]
-    (find-if #(= (:name %) name) (list-buffers))))
+    (find-if #(= (:name %) name) (buffer/buffers))))
 
 (defn- repo-name [root]
   (or (path-filename root) root))
@@ -516,7 +516,7 @@
                 (= repo-root
                   (project/repo-root-for-project-root
                     (:regit-root candidate)))))
-            (list-buffers))]
+            (buffer/buffers))]
       (when (seq status-buffers)
         (git-clear-repo-cache)
         (doseq [status-buffer status-buffers]
@@ -1009,7 +1009,7 @@
       (fn [buf]
         (when-let [file (:file buf)]
           (= (str file) target)))
-      (list-buffers))))
+      (buffer/buffers))))
 
 (defn- notify-buffer-file-git-change! [buf]
   (when-let [file (:file buf)]

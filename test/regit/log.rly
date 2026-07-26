@@ -108,7 +108,7 @@
               (sleep (ms->duration 100))
               (test/assert (not (regit-preview/active-preview log-buffer))
                 "Log preview state was created while regit-preview-on-focus was false")
-              (test/assert (not (some #(:regit-preview? @(buffer-state %)) (list-buffers)))
+              (test/assert (not (some #(:regit-preview? @(buffer-state %)) (buffer/buffers)))
                 "Log preview buffer was created while regit-preview-on-focus was false")))))
       (finally
         (sh! "rm" ["-rf" tmp-dir])))))
@@ -159,7 +159,7 @@
                   (move-cursor (with-read-lock [lock (buffer-text log-buffer)]
                                  (buffer/line-to-char lock second-line))
                     false log-window)
-                  (test/assert (some #(= (:id %) (:id first-preview)) (list-buffers))
+                  (test/assert (some #(= (:id %) (:id first-preview)) (buffer/buffers))
                     "First commit preview buffer was closed before the replacement preview was ready")
                   (is= first-preview (window-buffer first-preview-window))
                   (set! regit-preview/*before-create-preview-buffer-hook* previous-hook))
@@ -190,7 +190,7 @@
                       (str "Promoted log preview kept preview name: " (:name preview-buffer)))
                     (set-focused-window log-window)
                     (move-cursor 0 false log-window)
-                    (test/assert (some #(= (:id %) (:id preview-buffer)) (list-buffers))
+                    (test/assert (some #(= (:id %) (:id preview-buffer)) (buffer/buffers))
                       "Promoted log preview buffer was killed after moving the log cursor"))))))))
       (sh! "rm" ["-rf" tmp-dir]))))
 
@@ -249,9 +249,9 @@
                   (test/assert third-preview "Third commit preview buffer was not displayed")
                   (test/assert @raced-preview "Race hook did not capture the losing preview buffer")
                   (sleep (ms->duration 100))
-                  (test/assert (not (some #(= (:id %) (:id @raced-preview)) (list-buffers)))
+                  (test/assert (not (some #(= (:id %) (:id @raced-preview)) (buffer/buffers)))
                     "Preview buffer that lost ownership after display was retained")
-                  (let [preview-buffers (filter #(:regit-preview? @(buffer-state %)) (list-buffers))]
+                  (let [preview-buffers (filter #(:regit-preview? @(buffer-state %)) (buffer/buffers))]
                     (is= 1 (count preview-buffers))
                     (is= (:id third-preview) (:id (first preview-buffers))))))))))
       (sh! "rm" ["-rf" tmp-dir]))))
@@ -303,13 +303,13 @@
                                          :regit-preview? true
                                          :regit-preview-token orphan-token
                                          :regit-preview-source-buffer log-buffer)))]
-                (test/assert (some #(= (:id %) (:id orphan-preview)) (list-buffers))
+                (test/assert (some #(= (:id %) (:id orphan-preview)) (buffer/buffers))
                   "Orphan preview buffer was not created")
                 (log/update-log-preview!)
                 (sleep (ms->duration 100))
-                (test/assert (not (some #(= (:id %) (:id orphan-preview)) (list-buffers)))
+                (test/assert (not (some #(= (:id %) (:id orphan-preview)) (buffer/buffers)))
                   "Registered orphan preview buffer was retained")
-                (test/assert (some #(= (:id %) (:id first-preview)) (list-buffers))
+                (test/assert (some #(= (:id %) (:id first-preview)) (buffer/buffers))
                   "Current preview buffer was removed while cleaning orphans")
                 (is= (:id first-preview) (:id (:buffer (regit-preview/active-preview log-buffer)))))))))
       (sh! "rm" ["-rf" tmp-dir]))))

@@ -621,7 +621,7 @@
                   (move-cursor (with-read-lock [lock (buffer-text status-buffer)]
                                  (buffer/line-to-char lock stash-line))
                     false status-window)
-                  (test/assert (some #(= (:id %) (:id commit-preview)) (list-buffers))
+                  (test/assert (some #(= (:id %) (:id commit-preview)) (buffer/buffers))
                     "Commit preview buffer was closed before the replacement preview was ready")
                   (is= commit-preview (window-buffer commit-preview-window))
                   (set! regit-preview/*before-create-preview-buffer-hook* previous-hook))
@@ -656,7 +656,7 @@
                           (str "Promoted stash preview kept preview name: " (:name preview-buffer))))
                       (set-focused-window status-window)
                       (move-cursor 0 false status-window)
-                      (test/assert (some #(= (:id %) (:id preview-buffer)) (list-buffers))
+                      (test/assert (some #(= (:id %) (:id preview-buffer)) (buffer/buffers))
                         "Promoted stash preview buffer was killed after moving the status cursor")))))))))
       (sh! "rm" ["-rf" tmp-dir]))))
 
@@ -692,7 +692,7 @@
               (sleep (ms->duration 100))
               (test/assert (not (regit-preview/active-preview status-buffer))
                 "Status preview state was created while regit-preview-on-focus was false")
-              (test/assert (not (some #(:regit-preview? @(buffer-state %)) (list-buffers)))
+              (test/assert (not (some #(:regit-preview? @(buffer-state %)) (buffer/buffers)))
                 "Status preview buffer was created while regit-preview-on-focus was false")))))
       (finally
         (sh! "rm" ["-rf" tmp-dir])))))
@@ -831,7 +831,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)
-            initial-buffer-count (count (list-buffers))]
+            initial-buffer-count (count (buffer/buffers))]
         (binding [*window* status-window
                   *buffer* status-buffer]
           (is= true (:read-only @(buffer-state status-buffer)))
@@ -839,7 +839,7 @@
           (status/regit-status tmp-dir)
           (let [second-status-buffer (window-buffer (focused-window))]
             (is= (:id status-buffer) (:id second-status-buffer))
-            (is= initial-buffer-count (count (list-buffers)))
+            (is= initial-buffer-count (count (buffer/buffers)))
             (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))]
               (test/assert (str/includes? content "Repository:") "expected regit repository heading")
               (test/assert (not (str/includes? content "Branch:")) "did not expect old branch heading")
@@ -1384,7 +1384,7 @@
                 (str "our stage preview buffer should be displayed. Active preview: "
                   (regit-preview/active-preview status-buffer)
                   " buffers: "
-                  (mapv :name (list-buffers))))
+                  (mapv :name (buffer/buffers))))
               (test/assert (= true (:read-only @(buffer-state ours-preview))) "our stage preview should be read-only")
               (test/assert (str/includes? (str (:label @(buffer-state ours-preview))) "our")
                 (str "our stage preview label should mention our. Got: " (:label @(buffer-state ours-preview))))

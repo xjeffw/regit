@@ -1,5 +1,6 @@
 (ns regit.util
-  (:require [relay.base.frame :as frame]
+  (:require [relay.base.buffer :as buffer]
+            [relay.base.frame :as frame]
             [relay.base.mode :refer [activate-mode]]
             [relay.base.theme :as theme]
             [relay.string :as str])
@@ -13,7 +14,9 @@
          buffer# (when root#
                    (let [root-str# (str root#)
                          name# (str "*regit-status: " (or (path-filename root-str#) root-str#) "*")]
-                     (find-if (fn [candidate#] (= (:name candidate#) name#)) (list-buffers))))]
+                     (find-if
+                       (fn [candidate#] (= (:name candidate#) name#))
+                       (buffer/buffers))))]
      (if buffer#
        (if (buffer-pending? buffer#)
          (f#)

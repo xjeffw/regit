@@ -541,7 +541,7 @@
             others))))))
 
 (defn find-named-buffer [name]
-  (find-if #(= (:name %) name) (list-buffers)))
+  (find-if #(= (:name %) name) (buffer/buffers)))
 
 (defn close-buffer-returning-to-window! []
   (let [state @(buffer-state)
