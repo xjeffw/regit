@@ -259,7 +259,7 @@
 
 (defn- build-status-tree [root & [old-tree]]
   (let [old-node-by-id (index-tree-nodes old-tree)
-        status (git-status root)
+        status (project/cached-git-status root)
         conflicts (unmerged-status-entries root)
         conflict-path-set (conflict-paths conflicts)
         staged (vec (concat
@@ -507,15 +507,24 @@
     (binding [*buffer* candidate]
       (= *mode* :regit-status))))
 
-(defn- refresh-project-status-buffers! [root]
+(defn- refresh-project-status-buffers! [root changed-worktree-roots]
   (when-let [repo-root (project/repo-root-for-project-root root)]
-    (let [status-buffers
+    (let [canonical-root
+          (fn [path]
+            (try
+              (str (path-canonicalize path))
+              (catch exception _ (str path))))
+          changed-worktree-roots
+          (set (map canonical-root changed-worktree-roots))
+          status-buffers
           (filter
             (fn [candidate]
               (and (regit-status-buffer? candidate)
                 (= repo-root
                   (project/repo-root-for-project-root
-                    (:regit-root candidate)))))
+                    (:regit-root candidate)))
+                (contains? changed-worktree-roots
+                  (canonical-root (:regit-root candidate)))))
             (buffer/buffers))]
       (when (seq status-buffers)
         (git-clear-repo-cache)
@@ -1046,13 +1055,13 @@
       (perform-target-operation! target)
       (when-let [root (:regit-root *buffer*)]
         (git-refresh-index root)
-        (git-clear-repo-cache)
+        (project/clear-git-caches! root)
         (notify-file-git-change-for-target! (str root) target))
       (rerender-status-buffer! preferred-path)
       (catch exception e
         (message (ex-message e))
         (try
-          (git-clear-repo-cache)
+          (project/clear-git-caches! (:regit-root *buffer*))
           (rerender-status-buffer! preferred-path)
           (catch exception _ nil))))))
 
@@ -1068,7 +1077,7 @@
       (perform-stash-operation! root operation stash-id)
       (when (= operation :apply)
         (git-refresh-index root)
-        (git-clear-repo-cache)
+        (project/clear-git-caches! root)
         (notify-project-file-git-change! root))
       (rerender-status-buffer!)
       (catch exception e
@@ -1331,11 +1340,11 @@
           (try
             (perform-stash-operation! root :apply stash-id)
             (git-refresh-index root)
-            (git-clear-repo-cache)
             (notify-project-file-git-change! root)
             (catch exception e
               (message (ex-message e)))
             (finally
+              (project/clear-git-caches! root)
               (refresh-status! root)))))
       (message "Nothing to apply here"))))
 
@@ -1458,9 +1467,9 @@
 (def regit-status-keymaps
   [regit-status-keymap])
 
-(add-hook! [git/on-git-repo-change refresh-regit-status-on-git-repo-change-hook]
-  [root]
-  (refresh-project-status-buffers! root))
+(add-hook! [git/on-git-changed refresh-regit-status-on-git-changed-hook]
+  [root changed-worktree-roots]
+  (refresh-project-status-buffers! root changed-worktree-roots))
 
 (add-hook! [window/on-window-cursor-moved regit-status-preview-cursor-moved-hook] []
   (when (and (= *mode* :regit-status)

@@ -1103,6 +1103,7 @@
               (str "new-commits-only submodule should not be in Submodules: " lines)))
 
           (write-file child-file "committed and modified\n")
+          (project/clear-git-status-cache! root)
           (status/regit-status root)
           (let [lines (buffer-content-lines)
                 unstaged-range (get-section-range lines "Unstaged changes")
@@ -1760,7 +1761,7 @@
                         "Discard failed to remove change"))))))))))
     (sh! "rm" ["-rf" tmp-dir])))
 
-(deftest regit-status-refreshes-on-git-repo-change-test
+(deftest regit-status-refreshes-on-git-changed-test
   (let [root (temp-file-path "regit-status-git-change-refresh")
         alpha-path (path-join root "alpha.txt")
         target-path (path-join root "target.txt")]
@@ -1809,7 +1810,7 @@
                         (current-line status-buffer)))]
                 (write-file alpha-path "alpha after notification\n")
                 (write-file target-path "target after notification\n")
-                (hook/run-hooks git/on-git-repo-change root)
+                (hook/run-hooks git/on-git-changed root [root])
 
                 (let [lines (buffer-content-lines)
                       current-item
@@ -1842,7 +1843,7 @@
       (git! root "config" "user.email" "relay@example.com")
       (git! root "commit" "--allow-empty" "-m" "initial")
       (is= nil (status/find-status-buffer root))
-      (hook/run-hooks git/on-git-repo-change root)
+      (hook/run-hooks git/on-git-changed root [root])
       (is= nil (status/find-status-buffer root))
       (finally
         (cleanup root)))))
@@ -1859,12 +1860,12 @@
       (git! root "config" "user.email" "relay@example.com")
       (git! root "commit" "--allow-empty" "-m" "initial")
       (status/regit-status root)
-      (hook/add-hook! git/on-git-repo-change hook-key
-        (fn [changed-root]
+      (hook/add-hook! git/on-git-changed hook-key
+        (fn [changed-root _changed-worktree-roots]
           (swap! calls conj (str changed-root))))
       (git-monitor-repo root)
 
-      (hook/run-hooks git/on-git-repo-change root)
+      (hook/run-hooks git/on-git-changed root [root])
       (sleep (ms->duration 500))
 
       (is= [(str root)] @calls)
@@ -1900,9 +1901,9 @@
                 (buffer-content-lines)))
             "linked worktree status should start clean")
           (write-file tracked-path "changed\n")
-          ;; The repository monitor reports the main worktree root for changes in
-          ;; any linked worktree.
-          (hook/run-hooks git/on-git-repo-change root)
+          ;; The repository root remains the first hook argument while the
+          ;; second identifies the linked worktree that changed.
+          (hook/run-hooks git/on-git-changed root [worktree])
           (test/assert
             (some
               #(str/includes? (str %) "modified tracked.txt")

@@ -36,7 +36,7 @@
 
 (defn- after-git-change! [root start-window]
   (git-refresh-index root)
-  (git-clear-repo-cache)
+  (project/clear-git-caches! root)
   (notify-project-file-git-change! root)
   (refresh-status! root start-window))
 

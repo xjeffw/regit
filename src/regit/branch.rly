@@ -75,7 +75,7 @@
           result (apply git-cmd! root args)
           err (git-command-error args result)]
       (when-not err
-        (git-clear-repo-cache))
+        (project/clear-git-caches! root))
       err)))
 
 (defn- git-config-unset! [root key]
@@ -86,7 +86,7 @@
         nil
         (let [err (git-command-error args result)]
           (when-not err
-            (git-clear-repo-cache))
+            (project/clear-git-caches! root))
           err)))))
 
 (defn- git-config-set-or-unset! [root key value]
@@ -106,7 +106,7 @@
                     (str/join "\n"))]
       (if (zero? code)
         (do
-          (git-clear-repo-cache)
+          (project/clear-git-caches! root)
           nil)
         (if (str/blank? details)
           (str "git " (str/join " " args) " failed (exit " code ")")

@@ -3,6 +3,7 @@
             [relay.base.mode :as mode]
             [relay.base.frame :as frame]
             [relay.base.keys :as keys :refer [make-keymap map!]]
+            [relay.base.project :as project]
             [relay.ui.outline :as outline]
             [relay.string :as str]
             [relay.base.theme :as theme]
@@ -11,6 +12,10 @@
   (:use relay.core relay.builtins))
 
 (declare configure-view-stash-buffer!)
+
+(defn- refresh-status-after-git-change! [root]
+  (project/clear-git-caches! root)
+  (call-var regit.status/refresh-status! root))
 
 (defn- make-file-entry-items [section entry]
   (regit-diff/make-file-entry-items entry {:path-section section
@@ -253,8 +258,7 @@
         item (get (:line-to-item state) line)
         path (:id item)
         root (:regit-root state)
-        stash-id (:stash-id state)
-        refresh-fn #(call-var regit.status/refresh-status! %)]
+        stash-id (:stash-id state)]
     (if (and (vector? path) (or (= (first path) :file) (= (first path) :hunk)))
       (with-buffer-pending *buffer*
         (with-status-buffer-pending root
@@ -265,7 +269,7 @@
             (if (= (first path) :file)
               (let [patch (regit-diff/ensure-trailing-newline (or (:diff entry) ""))]
                 (git-apply-patch root patch staged?)
-                (refresh-fn root)
+                (refresh-status-after-git-change! root)
                 (message (str "Applied diff for " file-path (if staged? " (staged)" ""))))
               (let [hunk-id (nth path 3)
                     diff (or (:diff entry) "")
@@ -279,7 +283,7 @@
                 (if hunk
                   (let [patch (regit-diff/ensure-trailing-newline (str/join "\n" (concat preamble hunk)))]
                     (git-apply-patch root patch staged?)
-                    (refresh-fn root)
+                    (refresh-status-after-git-change! root)
                     (message (str "Applied hunk for " file-path (if staged? " (staged)" ""))))
                   (message "No patch available for this hunk")))))))
       (message "No regit action available at this line"))))

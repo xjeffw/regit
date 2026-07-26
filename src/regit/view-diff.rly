@@ -2,6 +2,7 @@
   (:require [relay.base.mode :as mode]
             [relay.base.frame :as frame]
             [relay.base.keys :as keys :refer [make-keymap map!]]
+            [relay.base.project :as project]
             [relay.ui.outline :as outline]
             [relay.string :as str]
             [regit.diff :as regit-diff]
@@ -34,7 +35,7 @@
 
 (defn- diff-entries [root section]
   (case section
-    :unstaged (let [{:keys [unstaged]} (git-status root)]
+    :unstaged (let [{:keys [unstaged]} (project/cached-git-status root)]
                 (filterv #(not= (:kind %) :untracked) unstaged))
     (git-staged-diff root)))
 

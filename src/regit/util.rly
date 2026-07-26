@@ -16,7 +16,7 @@
                          name# (str "*regit-status: " (or (path-filename root-str#) root-str#) "*")]
                      (find-if
                        (fn [candidate#] (= (:name candidate#) name#))
-                       (buffer/buffers))))]
+                       (relay.base.buffer/buffers))))]
      (if buffer#
        (if (buffer-pending? buffer#)
          (f#)

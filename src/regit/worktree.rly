@@ -108,7 +108,7 @@
       (str (worktree-name-prefix root) "_" branch))))
 
 (defn- visit-worktree! [directory]
-  (git-clear-repo-cache)
+  (project/clear-git-caches! directory)
   (call-var regit.status/regit-status directory))
 
 (defn worktree-add! [root directory target]
@@ -194,6 +194,8 @@
 
 (defn- finish-worktree-change! [old-root new-root]
   (git-clear-repo-cache)
+  (project/clear-git-status-cache! old-root)
+  (project/clear-git-status-cache! new-root)
   (when (and old-root (not= old-root new-root))
     (when-let [buffer (call-var regit.status/find-status-buffer old-root)]
       (kill-buffer buffer)))
@@ -258,7 +260,7 @@
                       (if-let [error (delete-worktree! root worktree)]
                         (message error)
                         (do
-                          (git-clear-repo-cache)
+                          (project/clear-git-caches! root)
                           (if deleting-current?
                             (finish-worktree-change! root primary)
                             (call-var regit.status/refresh-status! root))))))})))

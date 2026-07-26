@@ -36,7 +36,7 @@
     (let [result (apply git-cmd! root args)
           err (git-command-error args result)]
       (when-not err
-        (git-clear-repo-cache))
+        (project/clear-git-caches! root))
       err)))
 
 (defn- git-output [root & args]
@@ -79,7 +79,7 @@
           result (apply git-cmd! root args)
           err (git-command-error args result)]
       (when-not err
-        (git-clear-repo-cache))
+        (project/clear-git-caches! root))
       err)))
 
 (defn- git-config-add! [root key value]
@@ -88,7 +88,7 @@
           result (apply git-cmd! root args)
           err (git-command-error args result)]
       (when-not err
-        (git-clear-repo-cache))
+        (project/clear-git-caches! root))
       err)))
 
 (defn- git-config-unset! [root key]
@@ -99,7 +99,7 @@
         nil
         (let [err (git-command-error args result)]
           (when-not err
-            (git-clear-repo-cache))
+            (project/clear-git-caches! root))
           err)))))
 
 (defn- git-config-unset-all! [root key]
@@ -110,7 +110,7 @@
         nil
         (let [err (git-command-error args result)]
           (when-not err
-            (git-clear-repo-cache))
+            (project/clear-git-caches! root))
           err)))))
 
 (defn- git-config-set-or-unset! [root key value]
