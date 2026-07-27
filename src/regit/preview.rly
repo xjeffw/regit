@@ -283,13 +283,15 @@
             preview-window (:window preview)
             promote-buffer-fn (:promote-buffer-fn preview)]
         (cleanup-orphaned-preview-buffers! source-buffer preview)
+        ;; Keep the buffer protected by the source preview state until the
+        ;; promotion callback clears its :regit-preview? marker.
+        (when promote-buffer-fn
+          (promote-buffer-fn preview-buffer))
         (swap! (buffer-state source-buffer)
           (fn [state]
             (if (= (:token preview) (:token (:regit-preview state)))
               (dissoc state :regit-preview)
               state)))
-        (when promote-buffer-fn
-          (promote-buffer-fn preview-buffer))
         (set-window-buffer preview-buffer preview-window)
         (set-focused-window preview-window)
         true))))
