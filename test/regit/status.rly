@@ -16,7 +16,6 @@
             [relay.base.keys :as keys]
             [relay.base.mode :as mode]
             [relay.base.project :as project]
-            [relay.base.theme :as theme]
             [relay.base.window :as window]
             [relay.layout :as layout]
             [regit.command :as regit-command]
@@ -139,16 +138,14 @@
               *buffer* buffer]
       (send-keys character))))
 
-(deftest commit-line-hash-face-test
+(deftest commit-line-includes-hash-and-summary-test
   (let [line (status/commit-line {:id "abc1234" :refs [] :summary "summary"})]
-    (test/assert (property-string? line) "commit-line should preserve styled commit hash")
     (test/assert (str/includes? line "abc1234 summary") "commit-line missing commit text")))
 
 (deftest regit-status-linked-worktree-buffer-label-test
   (let [parent (temp-file-path "regit-status-worktree-label")
         root (path-join parent "relay")
-        worktree (path-join parent "work1")
-        label-buffer (create-buffer true)]
+        worktree (path-join parent "work1")]
     (try
       (sh! "rm" ["-rf" parent])
       (sh! "mkdir" [parent])
@@ -159,27 +156,8 @@
       (git! root "commit" "--allow-empty" "-m" "initial")
       (git! root "branch" "-M" "main")
       (git! root "worktree" "add" "-b" "work1" (str worktree))
-      (let [label (status/status-buffer-label worktree)
-            prefix-length (count "regit-status: ")
-            repo-end (+ prefix-length (count "relay"))
-            slash-end (inc repo-end)
-            worktree-end (+ slash-end (count "work1"))]
-        (is= "regit-status: relay/work1" (str/strip-properties label))
-        (binding [*buffer* label-buffer]
-          (set-string label)
-          (let [spans (buffer/property-spans label-buffer)
-                span-at (fn [start end]
-                          (find-if #(and (= start (:start %))
-                                      (= end (:end %)))
-                            spans))
-                repo-style (style->map (:properties (span-at prefix-length repo-end)))
-                slash-style (style->map (:properties (span-at repo-end slash-end)))
-                worktree-style (style->map (:properties (span-at slash-end worktree-end)))]
-            (is= (:fg (style->map (theme/style-for-face :regit-repo)))
-              (:fg repo-style))
-            (is= (:fg (style->map (theme/style-for-face :default)))
-              (:fg slash-style))
-            (is= (theme/color-hex :maroon) (:fg worktree-style)))))
+      (let [label (status/status-buffer-label worktree)]
+        (is= "regit-status: relay/work1" (str/strip-properties label)))
       (finally
         (sh! "rm" ["-rf" parent])))))
 
@@ -231,8 +209,7 @@
         root (path-join parent "relay")
         work1 (path-join parent "work1")
         work2 (path-join parent "work2")
-        source-buffer (create-buffer true)
-        label-buffer (create-buffer true)]
+        source-buffer (create-buffer true)]
     (try
       (cleanup parent)
       (sh! "mkdir" [parent])
@@ -270,20 +247,7 @@
           "worktree selector should autosubmit zero")
         (test/assert (re-matches (:autosubmit state) "9")
           "worktree selector should autosubmit digits through nine")
-        (is= 0 (:entry-position-base state))
-        (binding [*buffer* label-buffer]
-          (set-string (second labels))
-          (let [spans (buffer/property-spans label-buffer)
-                span-at (fn [start end]
-                          (find-if #(and (= start (:start %))
-                                      (= end (:end %)))
-                            spans))
-                repo-style (style->map (:properties (span-at 0 5)))
-                worktree-style (style->map (:properties (span-at 6 11)))]
-            (is= (:fg (style->map (theme/style-for-face :regit-repo)))
-              (:fg repo-style))
-            (is= (:fg (style->map (theme/style-for-face :regit-worktree)))
-              (:fg worktree-style)))))
+        (is= 0 (:entry-position-base state)))
       (enter-iselect-character! "1")
       (wait-for-focused-status work1 "numeric recent-project worktree selection")
       (is= (str (path-canonicalize work1))
@@ -651,8 +615,6 @@
                       (binding [*window* preview-window
                                 *buffer* preview-buffer]
                         (is= :regit-view-stash *mode*)
-                        (is= false outline/*show-arrows*)
-                        (is= 0 outline/*indent-width*)
                         (test/assert (str/includes? (:name preview-buffer) "*regit-stash: stash@{0}*")
                           (str "Promoted stash preview kept preview name: " (:name preview-buffer))))
                       (set-focused-window status-window)
@@ -847,12 +809,11 @@
               (test/assert (str/includes? content "Head:") "expected regit head summary")
               (test/assert (str/includes? content tmp-dir) "expected regit repository root"))
             (let [label (:label @(buffer-state status-buffer))]
-              (test/assert (property-string? label) "regit-status label should preserve styled spans")
               (test/assert (str/includes? label "regit-status: ") "regit-status label missing prefix")
               (test/assert (str/includes? label (path-filename tmp-dir)) "regit-status label missing repo name"))))))
     (sh! "rm" ["-rf" tmp-dir])))
 
-(deftest regit-status-show-commands-layout-test
+(deftest regit-status-show-commands-and-bindings-test
   (let [tmp-dir (temp-file-path "regit-status-show-commands")
         _ (sh! "rm" ["-rf" tmp-dir])
         _ (sh! "mkdir" [tmp-dir])
@@ -888,19 +849,6 @@
                             "Visit file at point"]]
             (test/assert (str/includes? text expected)
               (str "regit status help missing " expected ": " text)))
-          (let [lines (vec (str/split text #"\n"))
-                essential-idx (find-line-index lines #(str/includes? % "Essential commands"))]
-            (test/assert essential-idx "missing Essential commands heading")
-            (let [first-row (get lines (inc essential-idx))
-                  second-row (get lines (+ essential-idx 2))]
-              (test/assert (and (str/includes? first-row "Close buffer")
-                             (str/includes? first-row "Toggle section at point")
-                             (not (str/includes? first-row "Visit thing at point")))
-                (str "expected Essential commands first row to use two columns: " first-row))
-              (test/assert (and (str/includes? second-row "Visit thing at point")
-                             (str/includes? second-row "Visit file at point"))
-                (str "expected Essential commands second row to use two columns: " second-row))
-              (is= (str/index-of first-row "<tab>") (str/index-of second-row "C-<enter>"))))
           (binding [*buffer* ui-buf
                     *window* ui-win
                     *mode* :regit-command

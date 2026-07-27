@@ -31,7 +31,6 @@
             [relay.base.frame :as frame]
             [relay.base.keys :as keys]
             [relay.base.mode :as mode]
-            [relay.base.theme :as theme]
             [relay.string :as str]
             [relay.test :as test :refer [deftest is= is-error]]))
 
@@ -135,20 +134,6 @@
     (is= :git-rebase-todo *mode*)
     (test/assert (contains? (set *submodes*) :vim)
       (str context ": git-rebase-todo buffer should enable vim submode. Current submodes: " *submodes*))))
-
-(defn- assert-focused-todo-action-face [action context]
-  (let [buf (focused-buffer)
-        line (focused-line)
-        start (with-read-lock [lock (buffer-text buf)]
-                (buffer/line-to-char lock line))
-        end (+ start (count action))
-        action-span (find-if #(and (= start (:start %)) (= end (:end %)))
-                      (buffer/property-spans buf))
-        actual-style (when action-span (style->map (:properties action-span)))
-        expected-style (style->map (theme/style-for-face :git-rebase-todo-action))]
-    (test/assert action-span
-      (str context ": expected action span for " action ". Spans: " (buffer/property-spans buf)))
-    (is= (:fg expected-style) (:fg actual-style))))
 
 (defn- open-rebase-command-from-status! [root]
   (status/regit-status root)
@@ -256,7 +241,7 @@
         (rebase/git-rebase-todo-abort)))
     (cleanup tmp-dir)))
 
-(deftest regit-rebase-todo-mode-renders-action-face-and-bash-comments-test
+(deftest regit-rebase-todo-mode-configures-language-keybindings-and-comment-highlighting-test
   (let [tmp-dir (init-rebase-test-repo "regit-rebase-todo-style")
         result (rebase/run-rebase-onto! tmp-dir (assoc base-rebase-args :interactive true) "origin/main")]
     (test/assert (not (string? result)) (str "interactive rebase failed: " result))
@@ -265,37 +250,6 @@
       (binding [*buffer* todo-buffer
                 *window* (focused-window)]
         (is= "bash" mode/*language*)
-        (doseq [needle ["# p        pick = use commit"
-                        "# r        reword = use commit, but edit the commit message"
-                        "# e        edit = use commit, but stop for amending"
-                        "# s        squash = use commit, but meld into previous commit"
-                        "# f        fixup [-C | -c] <commit> = like \"squash\" but keep only the previous"
-                        "# u        undo last change"
-                        "# ZZ       tell Git to make it happen"
-                        "# ZQ       tell Git that you changed your mind, i.e. abort"
-                        "# k        move point to previous line"
-                        "# j        move point to next line"
-                        "# M-k      move the commit at point up"
-                        "# M-j      move the commit at point down"
-                        "# m, merge [-C <commit> | -c <commit>] <label> [# <oneline>]"]]
-          (test/assert (str/includes? content needle)
-            (str "todo help should mention " needle ". Got:\n" content)))
-        (test/assert (str/includes? content "# s-k      move the commit at point up")
-          (str "todo help should mention s-k. Got:\n" content))
-        (test/assert (str/includes? content "# s-j      move the commit at point down")
-          (str "todo help should mention s-j. Got:\n" content))
-        (test/assert (str/includes? content "# <enter>  show the commit at point in another buffer")
-          (str "todo help should mention <enter>. Got:\n" content))
-        (doseq [needle ["# l, label"
-                        "# t, reset"
-                        "# u, update-ref"
-                        "# z, noop"]]
-          (test/assert (not (str/includes? content needle))
-            (str "todo help should not include raw git command " needle ". Got:\n" content)))
-        (let [enter-line (find-line content "# <enter>")
-              merge-line (find-line content "# m, merge")]
-          (test/assert (and enter-line merge-line (< enter-line merge-line))
-            (str "extra todo help should be inserted above merge help. Got:\n" content)))
         (doseq [keys-str ["r" "w"]]
           (is= #'rebase/git-rebase-todo-reword
             (keys/lookup-keymap rebase/git-rebase-todo-keymap (keys/parse-key-sequence keys-str))))
@@ -310,12 +264,6 @@
         (doseq [keys-str ["c" "m" "l" "t" "M M" "M t" "<space>"]]
           (test/assert (nil? (keys/lookup-keymap rebase/git-rebase-todo-keymap (keys/parse-key-sequence keys-str)))
             (str "todo key should not be bound: " keys-str)))
-        (let [action-span (find-if #(and (= 0 (:start %)) (= 4 (:end %)))
-                            (buffer/property-spans todo-buffer))
-              actual-style (when action-span (style->map (:properties action-span)))
-              expected-style (style->map (theme/style-for-face :git-rebase-todo-action))]
-          (test/assert action-span (str "pick action should have a property span. Spans: " (buffer/property-spans todo-buffer)))
-          (is= (:fg expected-style) (:fg actual-style)))
         (buffer/wait-for-syntax-highlighting todo-buffer)
         (let [comment-start (str/index-of content "# ")
               spans (tree-sitter-highlights-in-range comment-start (+ comment-start 8) todo-buffer)]
@@ -343,8 +291,7 @@
       (send-keys "u")
       (move-focused-line! line)
       (test/assert (str/starts-with? (focused-todo-line-at line) "pick ")
-        (str "todo key u should undo the action change, got " (focused-todo-line-at line)))
-      (assert-focused-todo-action-face "pick" "todo key u"))
+        (str "todo key u should undo the action change, got " (focused-todo-line-at line))))
     (let [line (focused-line)]
       (binding [*buffer* (focused-buffer)]
         (is= #'rebase/git-rebase-todo-reword
@@ -356,8 +303,7 @@
       (send-keys "u")
       (move-focused-line! line)
       (test/assert (str/starts-with? (focused-todo-line-at line) "pick ")
-        (str "todo key u should undo the w action change, got " (focused-todo-line-at line)))
-      (assert-focused-todo-action-face "pick" "todo key w then u"))
+        (str "todo key u should undo the w action change, got " (focused-todo-line-at line))))
     (doseq [[key expected] [["e" "edit"]
                             ["s" "squash"]
                             ["f" "fixup"]

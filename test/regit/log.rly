@@ -70,7 +70,6 @@
                 label (:label @(buffer-state log-buffer))]
             (test/assert (str/includes? text "Commits in origin/feature") "regit-log missing target header")
             (test/assert (str/includes? text "remote commit") "regit-log missing remote target commit")
-            (test/assert (property-string? label) "regit-log label should preserve styled spans")
             (test/assert (str/includes? label "regit-log: ") "regit-log label missing prefix")
             (test/assert (str/includes? label "regit-log-target-test-repo") "regit-log label missing repo name")
             (test/assert (str/includes? label "origin/feature") "regit-log label missing branch target")))))

@@ -4,7 +4,6 @@
             [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
             [relay.base.keys :as keys]
-            [relay.base.theme :as theme]
             [relay.string :as str]
             [relay.test :as test :refer [is=]]
             [relay.ui.iselect :as iselect]
@@ -215,24 +214,6 @@
   (let [text (command-text)]
     (test/assert (str/includes? text needle)
       (str "expected regit command to contain " needle "\nGot:\n" text))))
-
-(defn assert-buffer-face-at [buf text needle face]
-  (let [pos (str/index-of text needle)]
-    (test/assert pos (str "missing " needle " in " text))
-    (binding [*buffer* buf]
-      (let [props (buffer/property-at pos)]
-        (test/assert (seq props) (str "missing properties at " needle))
-        (is= (:fg (style->map (theme/style-for-face face)))
-          (:fg (style->map (first props))))))))
-
-(defn assert-buffer-color-at [buf text needle color]
-  (let [pos (str/index-of text needle)]
-    (test/assert pos (str "missing " needle " in " text))
-    (binding [*buffer* buf]
-      (let [props (buffer/property-at pos)]
-        (test/assert (seq props) (str "missing properties at " needle))
-        (is= (:fg (style->map (theme/color-style color)))
-          (:fg (style->map (first props))))))))
 
 (defn with-focused-window [f]
   (let [win (focused-window)

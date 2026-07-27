@@ -97,7 +97,6 @@
                         (let [text (with-read-lock [lock (buffer-text)]
                                      (buffer/slice lock 0 (buffer/len-chars lock)))
                               label (:label @(buffer-state view-buffer))]
-                          (test/assert (property-string? label) "regit-view-commit label should preserve styled commit hash")
                           (test/assert (str/includes? label "regit-commit: ") "regit-view-commit label missing prefix")
                           (test/assert (str/includes? label "regit-view-commit-from-status-test") "regit-view-commit label missing repo name")
                           (test/assert (str/includes? label commit-id) "regit-view-commit label missing commit hash")

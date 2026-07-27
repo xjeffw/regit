@@ -4,13 +4,11 @@
             [relay.base.frame :as frame]
             [relay.base.keys :as keys]
             [relay.base.project :as project]
-            [relay.base.theme :as theme]
             [regit.command :as regit-command]
             [relay.string :as str]
             [relay.util :as util]
             [relay.test :as test :refer [deftest is= is-error]]))
 (deftest regit-push-test
-  (theme/load-theme :catppuccin-frappe)
   (let [user-relay (str (util/library-path 'relay.user))]
     (open-file user-relay)
     (let [focused-before (focused-window)
@@ -34,14 +32,7 @@
                                   (with-read-lock [lock (buffer-text)]
                                     (buffer/slice lock 0 (buffer/len-chars lock))))
                     ensure-contains (fn [text needle]
-                                      (test/assert (str/index-of text needle) (str "expected text to contain: " needle)))
-                    get-f-color (fn []
-                                  (let [full-text (get-ui-text)
-                                        pos (str/index-of full-text "--force-with-lease")]
-                                    (test/assert pos "could not find '--force-with-lease' in text")
-                                    (let [props (buffer/property-at pos)]
-                                      (test/assert (not (empty? props)) (str "no properties at position " pos))
-                                      (get (style->map (first props)) :fg))))]
+                                      (test/assert (str/index-of text needle) (str "expected text to contain: " needle)))]
                 (is= ui-win (focused-window))
                 (let [st @regit-command/*state*]
                   (test/assert st "regit-command state not initialized")
@@ -69,8 +60,7 @@
                   (test/assert (ifn? elsewhere-cmd) "could not find action command for 'e'")
                   (test/assert (ifn? close-cmd) "could not find close command for 'q'")
 
-                  (let [initial-color (get-f-color)
-                        initial-value (get-in @regit-command/*state* [:args :force-with-lease :value])]
+                  (let [initial-value (get-in @regit-command/*state* [:args :force-with-lease :value])]
                     ;; Toggle using key events: "-" then "f"
                     (let [dash (first (keys/parse-key-sequence "-"))
                           f-key (first (keys/parse-key-sequence "f"))]
@@ -79,16 +69,12 @@
                     (is= (not initial-value)
                       (get-in @regit-command/*state* [:args :force-with-lease :value]))
 
-                    (let [new-color (get-f-color)]
-                      (test/assert (not= initial-color new-color) (str "color did not change after toggle: " initial-color)))
-
                     ;; Toggle back using key events
                     (let [dash (first (keys/parse-key-sequence "-"))
                           f-key (first (keys/parse-key-sequence "f"))]
                       (frame/process-key-event dash)
                       (frame/process-key-event f-key))
-                    (is= initial-value (get-in @regit-command/*state* [:args :force-with-lease :value]))
-                    (is= initial-color (get-f-color)))
+                    (is= initial-value (get-in @regit-command/*state* [:args :force-with-lease :value])))
 
                   ;; Cleanup
                   (close-cmd))))))

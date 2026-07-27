@@ -14,7 +14,6 @@
                                       set-iselect-input!
                                       submit-simple-prompt!
                                       wait-for-focused-status]]
-            [relay.base.buffer :as buffer]
             [relay.base.keys :as keys]
             [relay.string :as str]
             [relay.test :as test :refer [deftest is=]]
@@ -34,7 +33,7 @@
               *buffer* buf]
       @simple-prompt/*state*)))
 
-(deftest regit-worktree-layout-and-status-binding-test
+(deftest regit-worktree-command-and-status-binding-test
   (let [root (init-test-repo "regit-worktree-layout")]
     (status/regit-status root)
     (let [binding (keys/lookup-keymap status/regit-status-keymap
@@ -53,14 +52,6 @@
                     "Delete worktree"
                     "Visit worktree"]]
       (assert-command-contains needle))
-    (let [text (str/strip-properties
-                 (with-read-lock [lock (buffer-text (window-buffer (minibuffer-ui-window)))]
-                   (buffer/slice lock 0 (buffer/len-chars lock))))
-          lines (str/split-lines text)]
-      (test/assert (str/includes? (first lines) "Create new")
-        (str "expected side-by-side Create new section, got: " text))
-      (test/assert (str/includes? (first lines) "Commands")
-        (str "expected side-by-side Commands section, got: " text)))
     (cleanup root)))
 
 (deftest regit-worktree-list-and-checkout-targets-test

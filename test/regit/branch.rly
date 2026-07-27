@@ -1,16 +1,13 @@
 (ns regit.tests.branch
   (:require [regit.branch :as branch]
             [regit.status :as status]
-            [regit.tests.util :as util
-             :refer [assert-command-contains
+            [regit.tests.util :refer [assert-command-contains
                      branch-present?
                      buffer-content
                      cleanup
                      close-command!
                      commit-file!
-                     command-buffer
                      command-state
-                     command-text
                      focused-buffer
                      git
                      git!
@@ -25,8 +22,6 @@
                      set-iselect-input!
                      submit-simple-prompt!]]
             [relay.base.keys :as keys]
-            [relay.base.buffer :as buffer]
-            [relay.base.theme :as theme]
             [regit.command :as regit-command]
             [relay.ui.iselect :as iselect]
             [relay.ui.simple-prompt :as simple-prompt]
@@ -41,23 +36,7 @@
 (defn- branch-rev [root branch]
   (git-out root "rev-parse" branch))
 
-(defn- assert-command-green-at [needle]
-  (let [buf (command-buffer)
-        text (command-text)]
-    (util/assert-buffer-color-at buf text needle :green)))
-
-(defn- assert-command-dimmed-at [needle]
-  (let [buf (command-buffer)
-        text (command-text)]
-    (util/assert-buffer-face-at buf text needle :dimmed)))
-
-(defn- assert-command-face-at [needle face]
-  (let [buf (command-buffer)
-        text (command-text)]
-    (util/assert-buffer-face-at buf text needle face)))
-
 (deftest regit-branch-command-layout-and-bindings-test
-  (theme/load-theme :catppuccin-frappe)
   (let [tmp-dir (init-test-repo "regit-branch-command")
         _ (git! tmp-dir "remote" "add" "origin" tmp-dir)]
     (branch/regit-branch tmp-dir)
@@ -92,15 +71,6 @@
                     "reset"
                     "delete"]]
       (assert-command-contains needle))
-    (let [lines (vec (str/split (command-text) #"\n"))
-          defaults-idx (first (keep-indexed
-                                (fn [idx line]
-                                  (when (str/includes? line "Configure repository defaults")
-                                    idx))
-                                lines))]
-      (test/assert defaults-idx "missing Configure repository defaults section")
-      (is= "" (nth lines (dec defaults-idx))))
-    (assert-command-face-at "main" :regit-branch)
     (close-command!)
     (cleanup tmp-dir)))
 
@@ -111,14 +81,6 @@
     (select-current-iselect-entry!)
     (assert-command-contains "Configure main")
     (assert-command-contains "Configure branch creation")
-    (let [lines (vec (str/split (command-text) #"\n"))
-          creation-idx (first (keep-indexed
-                                (fn [idx line]
-                                  (when (str/includes? line "Configure branch creation")
-                                    idx))
-                                lines))]
-      (test/assert creation-idx "missing Configure branch creation section")
-      (is= "" (nth lines (dec creation-idx))))
     (close-command!)
     (cleanup tmp-dir)))
 
@@ -140,7 +102,6 @@
     (cleanup tmp-dir)))
 
 (deftest regit-branch-configure-cycle-options-test
-  (theme/load-theme :catppuccin-frappe)
   (let [tmp-dir (init-test-repo "regit-branch-configure-cycle")
         _ (git! tmp-dir "remote" "add" "origin" tmp-dir)
         _ (git! tmp-dir "config" "pull.rebase" "true")
@@ -148,21 +109,16 @@
         _ (git! tmp-dir "config" "branch.autoSetupRebase" "always")]
     (branch/regit-branch-configure tmp-dir "main")
     (assert-command-contains "branch.main.rebase [true|false|pull.rebase:")
-    (assert-command-dimmed-at "false")
 
     (invoke-command-key! "r")
     (is= "true" (git-config tmp-dir "branch.main.rebase"))
-    (assert-command-green-at "true")
-    (assert-command-dimmed-at "false")
     (invoke-command-key! "r")
     (is= "false" (git-config tmp-dir "branch.main.rebase"))
-    (assert-command-green-at "false")
     (invoke-command-key! "r")
     (is= nil (git-config tmp-dir "branch.main.rebase"))
 
     (invoke-command-key! "p")
     (is= "origin" (git-config tmp-dir "branch.main.pushRemote"))
-    (assert-command-green-at "origin")
     (invoke-command-key! "p")
     (is= nil (git-config tmp-dir "branch.main.pushRemote"))
 

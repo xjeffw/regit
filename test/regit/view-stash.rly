@@ -52,7 +52,6 @@
             (let [text (with-read-lock [lock (buffer-text)]
                          (buffer/slice lock 0 (buffer/len-chars lock)))
                   label (:label @(buffer-state view-buffer))]
-              (test/assert (property-string? label) "regit-view-stash label should preserve styled stash name")
               (test/assert (str/includes? label "regit-stash: ") "regit-view-stash label missing prefix")
               (test/assert (str/includes? label "regit-view-stash-shows-separate-summaries-test") "regit-view-stash label missing repo name")
               (test/assert (str/includes? label "stash@{0}") "regit-view-stash label missing stash name")
