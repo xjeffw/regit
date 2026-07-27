@@ -17,6 +17,7 @@
             [relay.base.mode :as mode]
             [relay.base.project :as project]
             [relay.base.theme :as theme]
+            [relay.base.window :as window]
             [relay.layout :as layout]
             [regit.command :as regit-command]
             [regit.diff :as regit-diff]
@@ -1830,6 +1831,120 @@
                         lines))
                     "Git notification left stale target.txt content")
                   (is= cursor-path (:id current-item))))))))
+      (finally
+        (cleanup root)))))
+
+(deftest regit-status-defers-hidden-git-change-refresh-until-selected-test
+  (let [root (temp-file-path "regit-status-hidden-git-change-refresh")
+        tracked-path (path-join root "tracked.txt")
+        base-content "base\n"
+        ;; Give the clean status a line wide enough for a stale absolute cursor
+        ;; from the expanded diff to land far to its right.
+        long-subject (apply str (repeat 1200 "s"))
+        changed-line-suffix (apply str (repeat 24 "x"))
+        changed-content
+        (apply str
+          (map
+            #(format "changed-%03d %s\n" % changed-line-suffix)
+            (range 120)))]
+    (try
+      (cleanup root)
+      (sh! "mkdir" [root])
+      (git! root "init")
+      (git! root "config" "user.name" "Relay Test")
+      (git! root "config" "user.email" "relay@example.com")
+      (write-file tracked-path base-content)
+      (git! root "add" "tracked.txt")
+      (git! root "commit" "-m" long-subject)
+
+      (status/regit-status root)
+      (let [status-window (focused-window)
+            status-buffer (window-buffer status-window)
+            clean-lines
+            (binding [*window* status-window
+                      *buffer* status-buffer]
+              (buffer-content-lines))
+            commit-line
+            (last
+              (filterv
+                #(str/includes?
+                   (str (nth clean-lines %))
+                   (subs long-subject 0 80))
+                (range (count clean-lines))))
+            clean-commit-start
+            (with-read-lock [lock (buffer-text status-buffer)]
+              (buffer/line-to-char lock (or commit-line 0)))
+            clean-commit-end
+            (+ clean-commit-start
+              (count (str (nth clean-lines (or commit-line 0)))))]
+        (test/assert commit-line "long commit line not found")
+        (write-file tracked-path changed-content)
+        (hook/run-hooks git/on-git-changed root [root])
+
+        (binding [*window* status-window
+                  *buffer* status-buffer]
+          (let [lines (buffer-content-lines)
+                file-line
+                (find-line-index lines
+                  #(str/includes? (str %) "modified tracked.txt"))]
+            (test/assert file-line "tracked.txt status entry not found")
+            (move-cursor
+              (with-read-lock [lock (buffer-text status-buffer)]
+                (buffer/line-to-char lock file-line))
+              false
+              status-window)
+            (outline/toggle-fold))
+
+          (let [expanded-lines (buffer-content-lines)
+                ;; Layout snapshots store an absolute cursor. Pick a real diff
+                ;; line start whose offset becomes an interior column of the
+                ;; long commit line after the hidden buffer becomes clean.
+                target-line
+                (with-read-lock [lock (buffer-text status-buffer)]
+                  (let [changed-lines
+                        (filterv
+                          #(str/includes?
+                             (str (nth expanded-lines %))
+                             "+changed-")
+                          (range (count expanded-lines)))]
+                    (some
+                      (fn [line]
+                        (let [position (buffer/line-to-char lock line)]
+                          (when (and
+                                  (> position (+ clean-commit-start 300))
+                                  (< position clean-commit-end))
+                            line)))
+                      changed-lines)))]
+            (test/assert target-line
+              "expanded diff did not overlap the long clean-status line")
+            (move-cursor
+              (with-read-lock [lock (buffer-text status-buffer)]
+                (buffer/line-to-char lock target-line))
+              false
+              status-window)
+
+            (let [snapshot
+                  (window/create-layout-snapshot status-window)
+                  replacement-buffer (create-buffer true)]
+              (set-window-buffer replacement-buffer status-window)
+              (write-file tracked-path base-content)
+              (hook/run-hooks git/on-git-changed root [root])
+
+              (let [hidden-content
+                    (with-read-lock [lock (buffer-text status-buffer)]
+                      (buffer/slice lock 0 (buffer/len-chars lock)))]
+                (window/apply-layout-snapshot snapshot status-window)
+                (let [restored-content
+                      (with-read-lock [lock (buffer-text status-buffer)]
+                        (buffer/slice lock 0 (buffer/len-chars lock)))]
+                  (test/assert
+                    (str/includes? (str hidden-content) "+changed-")
+                    "hidden status buffer should remain unchanged until selected")
+                  (test/assert
+                    (not (str/includes? (str restored-content) "+changed-"))
+                    "selecting the stale status buffer should refresh it")
+                  (is= 0
+                    (horizontal-scroll-offset status-window))))))))
       (finally
         (cleanup root)))))
 

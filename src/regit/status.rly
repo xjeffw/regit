@@ -507,6 +507,16 @@
     (binding [*buffer* candidate]
       (= *mode* :regit-status))))
 
+(def pending-git-refresh-key :regit-status-pending-git-refresh)
+
+(defn- refresh-status-buffer-in-window! [status-buffer status-window]
+  (binding [*buffer* status-buffer
+            *window* status-window]
+    (with-status-buffer-pending (:regit-root status-buffer)
+      (rerender-status-buffer!)
+      (swap! (buffer-state status-buffer)
+        dissoc pending-git-refresh-key))))
+
 (defn- refresh-project-status-buffers! [root changed-worktree-roots]
   (when-let [repo-root (project/repo-root-for-project-root root)]
     (let [canonical-root
@@ -529,11 +539,11 @@
       (when (seq status-buffers)
         (git-clear-repo-cache)
         (doseq [status-buffer status-buffers]
-          (let [status-window (first (buffer-windows status-buffer))]
-            (binding [*buffer* status-buffer
-                      *window* status-window]
-              (with-status-buffer-pending (:regit-root status-buffer)
-                (rerender-status-buffer!)))))))))
+          (if-let [status-window (first (buffer-windows status-buffer))]
+            (refresh-status-buffer-in-window!
+              status-buffer status-window)
+            (swap! (buffer-state status-buffer)
+              assoc pending-git-refresh-key true)))))))
 
 (defn- preview-target [kind root id]
   [kind (str root) id])
@@ -1470,6 +1480,21 @@
 (add-hook! [git/on-git-changed refresh-regit-status-on-git-changed-hook]
   [root changed-worktree-roots]
   (refresh-project-status-buffers! root changed-worktree-roots))
+
+(add-hook! [window/on-window-select-buffer refresh-pending-regit-status-on-select-buffer-hook]
+  100
+  [selected-window selected-buffer]
+  (when (and
+          (regit-status-buffer? selected-buffer)
+          (get @(buffer-state selected-buffer)
+            pending-git-refresh-key))
+    ;; The buffer stayed unchanged while hidden, so the restored window cursor
+    ;; still identifies its old logical status item. Rerender only after the
+    ;; window exists, allowing rerender-status-buffer! to translate that item
+    ;; to its new line without invalidating a saved workspace cursor.
+    (git-clear-repo-cache)
+    (refresh-status-buffer-in-window!
+      selected-buffer selected-window)))
 
 (add-hook! [window/on-window-cursor-moved regit-status-preview-cursor-moved-hook] []
   (when (and (= *mode* :regit-status)
