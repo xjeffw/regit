@@ -1480,7 +1480,7 @@
 
 (add-hook! [window/on-window-select-buffer refresh-pending-regit-status-on-select-buffer-hook]
   100
-  [selected-window selected-buffer]
+  [selected-window _old-buffer selected-buffer]
   (when (and
           (regit-status-buffer? selected-buffer)
           (get @(buffer-state selected-buffer)

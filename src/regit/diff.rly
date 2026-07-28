@@ -493,7 +493,8 @@
   (sync-diff-context-decoration-size-for-window!
     (current-diff-context-window)))
 
-(add-hook! [window/on-window-select-buffer regit-diff-context-window-select-buffer-hook] [win _buffer]
+(add-hook! [window/on-window-select-buffer regit-diff-context-window-select-buffer-hook]
+  [win _old-buffer _new-buffer]
   (sync-diff-context-decoration-size-for-window! win))
 
 (add-hook! [window/on-window-resized regit-diff-context-window-resized-hook] [win _old-size _new-size]
