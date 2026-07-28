@@ -473,11 +473,11 @@
           (min fallback-line last-line))))))
 
 (defn- rerender-status-buffer! [& [preferred-path]]
-  (when-let [root (:regit-root *buffer*)]
-    (let [buffer *buffer*
-          window (or (when (and *window*
-                             (= (:id (window-buffer *window*)) (:id buffer)))
-                       *window*)
+  (when-let [root (:regit-root (resolve-buffer))]
+    (let [buffer (resolve-buffer)
+          window (or (when (and (resolve-window)
+                             (= (:id (window-buffer (resolve-window))) (:id buffer)))
+                       (resolve-window))
                    (first (buffer-windows buffer)))
           state @(buffer-state buffer)
           landmarks (or (:landmarks state) [])
@@ -581,8 +581,8 @@
     nil))
 
 (defn- update-status-preview! []
-  (let [source-buffer *buffer*
-        source-window (or *window* (focused-window))
+  (let [source-buffer (resolve-buffer)
+        source-window (or (resolve-window) (focused-window))
         target (with-buffer+window [source-buffer source-window]
                  (preview-target-at-cursor))]
     (regit-preview/update-preview!
@@ -616,7 +616,7 @@
     (combined-diff? entry)))
 
 (defn- action-target-at-line [line operation]
-  (when-let [root (:regit-root *buffer*)]
+  (when-let [root (:regit-root (resolve-buffer))]
     (let [state @(buffer-state)
           item (get (:line-to-item state) line)
           path (:id item)]
@@ -735,7 +735,7 @@
     (perform-file-operation! root section operation entry opts)))
 
 (defn- perform-target-operation! [target]
-  (let [root (str (:regit-root *buffer*))
+  (let [root (str (:regit-root (resolve-buffer)))
         entry (:entry target)
         section (:section target)]
     (case (:scope target)
@@ -1062,10 +1062,10 @@
       (catch exception e nil))))
 
 (defn- execute-status-target! [target & [preferred-path]]
-  (with-status-buffer-pending (:regit-root *buffer*)
+  (with-status-buffer-pending (:regit-root (resolve-buffer))
     (try
       (perform-target-operation! target)
-      (when-let [root (:regit-root *buffer*)]
+      (when-let [root (:regit-root (resolve-buffer))]
         (git-refresh-index root)
         (project/clear-git-caches! root)
         (notify-file-git-change-for-target! (str root) target))
@@ -1073,7 +1073,7 @@
       (catch exception e
         (message (ex-message e))
         (try
-          (project/clear-git-caches! (:regit-root *buffer*))
+          (project/clear-git-caches! (:regit-root (resolve-buffer)))
           (rerender-status-buffer! preferred-path)
           (catch exception _ nil))))))
 
@@ -1097,9 +1097,9 @@
 
 (defn- confirm-target-operation! [target]
   (if (target-requires-conflict-choice? target)
-    (let [root (:regit-root *buffer*)
-          source-buffer *buffer*
-          source-window (or *window* (focused-window))
+    (let [root (:regit-root (resolve-buffer))
+          source-buffer (resolve-buffer)
+          source-window (or (resolve-window) (focused-window))
           _ (when source-window
               (regit-diff/regit-view-window {:source-window source-window
                                              :fallback-to-created-window? true}))
@@ -1133,11 +1133,11 @@
 
 (defn- run-status-action! [operation]
   (let [line (current-line)
-        root (:regit-root *buffer*)]
+        root (:regit-root (resolve-buffer))]
     (if-let [target (action-target-at-line line operation)]
       (if (target-requires-confirmation? target)
         (confirm-target-operation! target)
-        (let [landmarks (:landmarks @(buffer-state *buffer*))
+        (let [landmarks (:landmarks @(buffer-state (resolve-buffer)))
               preferred-path (when (or (= operation :stage) (= operation :unstage))
                                (outline/find-next-path landmarks line (:section target)))]
           (execute-status-target! target preferred-path)))
@@ -1173,8 +1173,8 @@
       nil)))
 
 (defn- jump-to-target-internal [force-file?]
-  (let [window (or *window* (focused-window))
-        buffer (or *buffer* (window-buffer window))]
+  (let [window (or (resolve-window) (focused-window))
+        buffer (or (resolve-buffer) (window-buffer window))]
     (binding [*buffer* buffer]
       (let [line (current-line)
             state @(buffer-state buffer)
@@ -1292,7 +1292,7 @@
         buffer (or existing (create-buffer true))
         label (status-buffer-label root)
         focused (focused-window)
-        target-frame (or *frame* (some-> focused window-frame))
+        target-frame (or (resolve-frame) (some-> focused window-frame))
         normal-windows (when target-frame
                          (frame-normal-windows target-frame))
         existing-window (when existing
@@ -1496,7 +1496,7 @@
 
 (add-hook! [window/on-window-cursor-moved regit-status-preview-cursor-moved-hook] []
   (when (and (= *mode* :regit-status)
-          (= *window* (focused-window))
+          (= (resolve-window) (focused-window))
           regit-preview/regit-preview-on-focus)
     (update-status-preview!)))
 

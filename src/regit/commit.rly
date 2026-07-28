@@ -64,7 +64,7 @@
                     (after-git-change! root (:start-window opts)))))))
 
 (defn- buffer-string [& [buf]]
-  (let [buf (or buf *buffer*)]
+  (let [buf (or buf (resolve-buffer))]
     (with-read-lock [lock (buffer-text buf)]
       (buffer/slice lock 0 (buffer/len-chars lock)))))
 
@@ -95,7 +95,7 @@
     (str/strip-properties (or (buffer/first-line buffer) ""))))
 
 (defn- initialize-commit-message-mode! []
-  (let [commit-buffer *buffer*
+  (let [commit-buffer (resolve-buffer)
         state @(buffer-state commit-buffer)
         context (commit-message-editor-context commit-buffer state)]
     (when context
@@ -120,7 +120,7 @@
 (def commit-message-static-keymap (make-keymap))
 
 (defn- commit-message-keymap [key-seq]
-  (or (when (commit-message-editor-context? @(buffer-state *buffer*))
+  (or (when (commit-message-editor-context? @(buffer-state (resolve-buffer)))
         (keys/lookup-keymap commit-message-handler-keymap key-seq))
     (keys/lookup-keymap commit-message-static-keymap key-seq)))
 
@@ -161,21 +161,21 @@
     (close-commit-buffer! buffer return-window)))
 
 (defn finish-commit []
-  (let [state @(buffer-state *buffer*)]
+  (let [state @(buffer-state (resolve-buffer))]
     (cond
       (editor-backed-commit-message? state)
-      (finish-git-editor-commit-message! *buffer* state)
+      (finish-git-editor-commit-message! (resolve-buffer) state)
 
       (git-editor-app-commit-message? state)
       (do
-        (save-file *buffer*)
+        (save-file (resolve-buffer))
         (kill-relay))
 
       :else
       (message "No git commit editor is active"))))
 
 (defn ^:interactive abort-commit []
-  (let [buffer *buffer*
+  (let [buffer (resolve-buffer)
         state @(buffer-state buffer)]
     (cond
       (editor-backed-commit-message? state)

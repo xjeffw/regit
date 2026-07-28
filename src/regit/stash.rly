@@ -519,6 +519,6 @@
                      :value false
                      :incompatible ["u"]}}
          :return-window return-window
-         :actions (stash-actions root context-stash-id *buffer*)
+         :actions (stash-actions root context-stash-id (resolve-buffer))
          :layout (stash-layout)}))
     (message "Not in a git repository")))

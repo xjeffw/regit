@@ -434,7 +434,7 @@
     (when (> row-count 0)
       (swap! rows assoc 0
         (diff-context-row
-          (or (diff-context-line-for-start start-line *buffer*) ""))))
+          (or (diff-context-line-for-start start-line (resolve-buffer)) ""))))
     @rows))
 
 (define-buffer-decoration regit-diff-context-decoration
@@ -461,7 +461,7 @@
   (when (safe-window-buffer win) win))
 
 (defn- current-diff-context-window []
-  (or (valid-diff-context-window *window*)
+  (or (valid-diff-context-window (resolve-window))
     (valid-diff-context-window (ignore-errors (focused-window)))))
 
 (defn- window-top-visible-line [win]

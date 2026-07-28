@@ -425,17 +425,17 @@
     "No editable rebase todo found"))
 
 (defn- buffer-string [& [buf]]
-  (let [buf (or buf *buffer*)]
+  (let [buf (or buf (resolve-buffer))]
     (with-read-lock [lock (buffer-text buf)]
       (buffer/slice lock 0 (buffer/len-chars lock)))))
 
 (defn- todo-window []
-  (or (focused-window) *window*))
+  (or (focused-window) (resolve-window)))
 
 (defn- todo-buffer []
   (or (when-let [win (todo-window)]
         (window-buffer win))
-    *buffer*))
+    (resolve-buffer)))
 
 (defn- buffer-display-string [& [buf]]
   (plain-text (buffer-string (or buf (todo-buffer)))))
@@ -565,7 +565,7 @@
     {:name name
      :prompt prompt
      :initial-input (or initial-input "")
-     :target-window (or *window* (focused-window))
+     :target-window (or (resolve-window) (focused-window))
      :on-submit (fn [input]
                   (let [input (str/trim input)]
                     (when-not (str/blank? input)

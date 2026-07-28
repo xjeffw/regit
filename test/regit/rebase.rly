@@ -93,7 +93,7 @@
   (str/split-lines (git-out root "log" "--format=%s")))
 
 (defn- send-keys-queued [keys-str]
-  (let [frame-id (:id *frame*)]
+  (let [frame-id (:id (resolve-frame))]
     (frame/set-pending-sequence! frame-id [])
     (frame/set-numeric-prefix! frame-id nil))
   (doseq [keyspec (keys/parse-key-sequence keys-str)]

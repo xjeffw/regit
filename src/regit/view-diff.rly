@@ -95,7 +95,7 @@
 
 (defn ^:interactive regit-view-diff [& [root section]]
   (let [return-window (focused-window)
-        root (or root (:regit-root *buffer*) (current-directory))
+        root (or root (:regit-root (resolve-buffer)) (current-directory))
         section (normalize-section section)
         existing (find-view-diff-buffer root section)
         buffer (or existing (create-buffer true))
@@ -182,19 +182,19 @@
 
 (defn- jump-to-view-diff-target! [force-file?]
   (let [focused (focused-window)
-        dynamic-window-buffer (when *window* (ignore-errors (window-buffer *window*)))
-        window (if (and *window*
-                     *buffer*
+        dynamic-window-buffer (when (resolve-window) (ignore-errors (window-buffer (resolve-window))))
+        window (if (and (resolve-window)
+                     (resolve-buffer)
                      dynamic-window-buffer
-                     (= (:id *buffer*) (:id dynamic-window-buffer)))
-                 *window*
+                     (= (:id (resolve-buffer)) (:id dynamic-window-buffer)))
+                 (resolve-window)
                  focused)
         window-buffer (when window (window-buffer window))
-        buffer (if (and *buffer*
+        buffer (if (and (resolve-buffer)
                      window-buffer
-                     (= (:id *buffer*) (:id window-buffer)))
-                 *buffer*
-                 (or window-buffer *buffer*))]
+                     (= (:id (resolve-buffer)) (:id window-buffer)))
+                 (resolve-buffer)
+                 (or window-buffer (resolve-buffer)))]
     (with-buffer+window [buffer window]
       (let [state @(buffer-state buffer)
             line (current-line)

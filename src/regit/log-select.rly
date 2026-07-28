@@ -123,7 +123,7 @@
     (set-buffer-read-only true buf)))
 
 (defn commit-id-at-line [line & [buf]]
-  (let [buf (or buf *buffer*)]
+  (let [buf (or buf (resolve-buffer))]
     (with-read-lock [lock (buffer-text buf)]
       (when (and (>= line 0)
               (< line (buffer/len-lines lock)))

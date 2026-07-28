@@ -325,7 +325,7 @@
 (add-hook! [buffer/before-buffer-destroy regit-preview-source-destroy-hook] []
   (ignore-errors
     (when (:regit-preview @(buffer-state))
-      (abort-preview! *buffer*))))
+      (abort-preview! (resolve-buffer)))))
 
 (add-hook! [buffer/before-buffer-destroy regit-preview-buffer-destroy-hook] []
   (ignore-errors
@@ -336,6 +336,6 @@
             (swap! (buffer-state source-buffer)
               (fn [source-state]
                 (if (and (= token (:token (:regit-preview source-state)))
-                      (= (:id *buffer*) (:id (:buffer (:regit-preview source-state)))))
+                      (= (:id (resolve-buffer)) (:id (:buffer (:regit-preview source-state)))))
                   (dissoc source-state :regit-preview)
                   source-state)))))))))

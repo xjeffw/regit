@@ -258,7 +258,7 @@
       (simple-prompt/simple-prompt-submit))))
 
 (defn send-keys [keys-str]
-  (let [frame-id (:id *frame*)]
+  (let [frame-id (:id (resolve-frame))]
     (frame/set-pending-sequence! frame-id [])
     (frame/set-numeric-prefix! frame-id nil))
   (doseq [keyspec (keys/parse-key-sequence keys-str)]

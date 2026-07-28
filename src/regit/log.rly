@@ -153,19 +153,19 @@
     (set-buffer-read-only true buffer)))
 
 (defn- rerender-log-buffer! []
-  (when-let [root (:regit-root *buffer*)]
-    (let [window (or *window* (focused-window))
+  (when-let [root (:regit-root (resolve-buffer))]
+    (let [window (or (resolve-window) (focused-window))
           cursor-line (current-line)
           scroll (when window (scroll-offset window))
           state @(buffer-state)
           target (:regit-log-target state)
           limit (:regit-log-limit state)]
       (frame/with-render-coalescing
-        (render-log-buffer! *buffer* root target limit)
+        (render-log-buffer! (resolve-buffer) root target limit)
         (when window
-          (let [last-line (max 0 (dec (buffer-lines *buffer*)))
+          (let [last-line (max 0 (dec (buffer-lines (resolve-buffer))))
                 target-line (min cursor-line last-line)
-                target-pos (with-read-lock [lock (buffer-text *buffer*)]
+                target-pos (with-read-lock [lock (buffer-text (resolve-buffer))]
                              (buffer/line-to-char lock target-line))]
             (move-cursor target-pos false window)
             (when scroll
@@ -197,8 +197,8 @@
   (call-var regit.view-commit/promote-regit-view-commit-preview! preview-buffer return-window))
 
 (defn- update-log-preview! []
-  (let [source-buffer *buffer*
-        source-window (or *window* (focused-window))
+  (let [source-buffer (resolve-buffer)
+        source-window (or (resolve-window) (focused-window))
         target (with-buffer+window [source-buffer source-window]
                  (preview-target-at-cursor))]
     (regit-preview/update-preview!
@@ -215,10 +215,10 @@
         commit-id (commit-id-at-line (current-line))]
     (if commit-id
       (let [target (preview-target root commit-id)]
-        (if-not (regit-preview/promote-preview! *buffer* target)
+        (if-not (regit-preview/promote-preview! (resolve-buffer) target)
           (do
-            (regit-preview/abort-preview! *buffer*)
-            (let [source-buffer *buffer*
+            (regit-preview/abort-preview! (resolve-buffer))
+            (let [source-buffer (resolve-buffer)
                   result (regit-view-commit commit-id)]
               (regit-preview/abort-preview! source-buffer)
               result))))
@@ -251,7 +251,7 @@
 
 (add-hook! [window/on-window-cursor-moved regit-log-preview-cursor-moved-hook] []
   (when (and (= *mode* :regit-log)
-          (= *window* (focused-window))
+          (= (resolve-window) (focused-window))
           regit-preview/regit-preview-on-focus)
     (update-log-preview!)))
 
