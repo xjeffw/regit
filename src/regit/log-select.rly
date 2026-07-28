@@ -136,7 +136,7 @@
         return-window (:return-window state)]
     (if commit-id
       (do
-        (close-buffer)
+        (buffer/close-buffer)
         (when return-window
           (set-focused-window return-window))
         (pick-fn commit-id))
@@ -146,7 +146,7 @@
   (let [state @(buffer-state)
         quit-fn (:quit-fn state)
         return-window (:return-window state)]
-    (close-buffer)
+    (buffer/close-buffer)
     (when return-window
       (set-focused-window return-window))
     (when quit-fn

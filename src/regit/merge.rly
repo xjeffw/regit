@@ -352,7 +352,7 @@
 
 (defn ^:interactive regit-merge-preview-quit []
   (let [return-window (:return-window @(buffer-state *buffer*))]
-    (close-buffer)
+    (buffer/close-buffer)
     (when return-window
       (set-focused-window return-window))))
 

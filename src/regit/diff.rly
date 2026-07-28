@@ -76,9 +76,9 @@
 (defn entry-change-line-overlay-style [entry]
   (let [{:keys [added removed]} (entry-change-summary entry)]
     {:text (str
-             (theme/with-face (str "+" added) :success)
+             (theme/with-color-style (str "+" added) :success)
              " "
-             (theme/with-face (str "-" removed) :error))
+             (theme/with-color-style (str "-" removed) :error))
      :alignment :right}))
 
 (defn summarize-entries [entries]
@@ -552,6 +552,6 @@
 (defn close-buffer-returning-to-window! []
   (let [state @(buffer-state)
         return-window (:return-window state)]
-    (close-buffer)
+    (buffer/close-buffer)
     (when (and return-window (window-frame return-window))
       (set-focused-window return-window))))

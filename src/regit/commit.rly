@@ -139,7 +139,7 @@
         (kill-buffer diff-buffer)))))
 
 (defn- close-commit-buffer! [buffer return-window]
-  (close-buffer true buffer)
+  (buffer/close-buffer true buffer)
   (when return-window
     (set-focused-window return-window)))
 
@@ -200,7 +200,7 @@
       :else
       (do
         (kill-associated-view-diff-buffer! buffer)
-        (close-buffer)))))
+        (buffer/close-buffer)))))
 
 (map! :map commit-message-static-keymap
   ("C-c C-c" #'finish-commit)

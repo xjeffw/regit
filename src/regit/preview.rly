@@ -48,7 +48,7 @@
                        preview-windows
                        [fallback-window])]
         (ignore-errors
-          (close-buffer true preview-buffer window)))
+          (buffer/close-buffer true preview-buffer window)))
       (when (buffer-listed? preview-buffer)
         (ignore-errors
           (kill-buffer preview-buffer))))))

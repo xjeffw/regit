@@ -631,7 +631,7 @@
   (move-current-line-by! 1))
 
 (defn- close-todo-buffer! [return-window]
-  (close-buffer)
+  (buffer/close-buffer)
   (when return-window
     (set-focused-window return-window)))
 

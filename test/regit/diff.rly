@@ -33,9 +33,9 @@
         text (:text overlay)]
     (is= :right (:alignment overlay))
     (is= "+2 -1" (str/strip-properties text))
-    (is= (style->map (theme/style-for-face :success))
+    (is= (style->map (theme/color-style :success))
       (property-string-style-at text 0))
-    (is= (style->map (theme/style-for-face :error))
+    (is= (style->map (theme/color-style :error))
       (property-string-style-at text 3))))
 
 (deftest scaled-summary-widths-test

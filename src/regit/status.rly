@@ -1402,7 +1402,7 @@
    "a" {:label "apply" :fn #'regit-status-apply}
    "<enter>" {:label "open" :fn #'regit-status-enter}
    "C-<enter>" {:label "open file" :fn #'regit-status-jump-to-file}
-   "q" {:label "quit" :fn #'close-buffer}})
+   "q" {:label "quit" :fn #'buffer/close-buffer}})
 
 (def regit-status-command-order
   ["s" "u" "f" "F" "M" "b" "Z" "w" "x" "c" "m" "r" "O" "l" "z" "P" "a" "<enter>" "C-<enter>" "q" "?"])

@@ -411,7 +411,7 @@
 (def regit-stashes-keymap (make-keymap))
 
 (map! :map regit-stashes-keymap
-  ("q" #'close-buffer)
+  ("q" #'buffer/close-buffer)
   ("<enter>" #'stashes-list-show)
   ("v" #'stashes-list-show))
 

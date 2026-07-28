@@ -235,7 +235,7 @@
 (def regit-log-keymap (make-keymap))
 
 (map! :map regit-log-keymap
-  ("q" #'close-buffer)
+  ("q" #'buffer/close-buffer)
   ("<enter>" #'regit-log-enter)
   ("O" #'regit-reset)
   ("+" #'regit-log-more))
