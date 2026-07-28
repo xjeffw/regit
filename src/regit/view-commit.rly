@@ -109,14 +109,13 @@
 (defn render-view-commit-buffer! [buffer root commit-id & [opts]]
   (let [tree (build-view-commit-tree root commit-id opts)
         expand-files? (not= false (:expand-files? opts))]
-    (binding [*buffer* buffer]
-      (regit-diff/configure-outline-buffer! buffer)
-      (regit-diff/initialize-expanded-ids! buffer tree #{:heading :stat :entries}
-        (fn [tree]
-          (if expand-files?
-            (view-commit-file-ids tree)
-            [])))
-      (outline/render-outline! buffer tree {:preserve-position? false}))))
+    (regit-diff/configure-outline-buffer! buffer)
+    (regit-diff/initialize-expanded-ids! buffer tree #{:heading :stat :entries}
+      (fn [tree]
+        (if expand-files?
+          (view-commit-file-ids tree)
+          [])))
+    (outline/render-outline! buffer tree {:preserve-position? false})))
 
 (defn- find-view-commit-buffer [root commit-id]
   (let [name (view-commit-buffer-name commit-id)]

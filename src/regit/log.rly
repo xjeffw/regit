@@ -136,19 +136,18 @@
 (defn- render-log-buffer! [buffer root target limit]
   (let [{:keys [content commits]} (build-log-document root target limit)]
     (set-buffer-read-only false buffer)
-    (binding [*buffer* buffer]
-      (set-string content buffer)
-      (clear-line-overlay :regit-log-info buffer)
-      (doseq [idx (range (count commits))]
-        (let [commit (nth commits idx)
-              line (inc idx) ;; Commits start at line 1 (after header)
-              author (:author commit)
-              date (util/format-relative-time (:date commit))
-              text (str (theme/with-face author :regit-author)
-                     " " (theme/with-face (str/left-pad date 12) :regit-date))]
-          (add-line-overlay-span :regit-log-info line (inc line)
-            {:text text :alignment :right :offset 2}
-            buffer))))
+    (set-string content buffer)
+    (clear-line-overlay :regit-log-info buffer)
+    (doseq [idx (range (count commits))]
+      (let [commit (nth commits idx)
+            line (inc idx) ;; Commits start at line 1 (after header)
+            author (:author commit)
+            date (util/format-relative-time (:date commit))
+            text (str (theme/with-face author :regit-author)
+                   " " (theme/with-face (str/left-pad date 12) :regit-date))]
+        (add-line-overlay-span :regit-log-info line (inc line)
+          {:text text :alignment :right :offset 2}
+          buffer)))
 
     (set-buffer-read-only true buffer)))
 

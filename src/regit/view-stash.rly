@@ -114,14 +114,13 @@
 (defn- render-view-stash-buffer! [buffer root stash-id & [opts]]
   (let [tree (build-view-stash-tree root stash-id)
         expand-files? (not= false (:expand-files? opts))]
-    (binding [*buffer* buffer]
-      (regit-diff/configure-outline-buffer! buffer)
-      (regit-diff/initialize-expanded-ids! buffer tree #{:heading [:summary :staged] [:summary :unstaged] [:section :staged] [:section :unstaged]}
-        (fn [tree]
-          (if expand-files?
-            (view-stash-file-ids tree)
-            [])))
-      (outline/render-outline! buffer tree {:preserve-position? false}))))
+    (regit-diff/configure-outline-buffer! buffer)
+    (regit-diff/initialize-expanded-ids! buffer tree #{:heading [:summary :staged] [:summary :unstaged] [:section :staged] [:section :unstaged]}
+      (fn [tree]
+        (if expand-files?
+          (view-stash-file-ids tree)
+          [])))
+    (outline/render-outline! buffer tree {:preserve-position? false})))
 
 (defn ^:interactive regit-view-stash [stash-id & [root]]
   (let [return-window (focused-window)

@@ -83,11 +83,10 @@
 
 (defn- render-view-diff-buffer! [buffer root section]
   (let [tree (build-view-diff-tree root section)]
-    (binding [*buffer* buffer]
-      (regit-diff/configure-outline-buffer! buffer)
-      (regit-diff/initialize-expanded-ids! buffer tree #{:heading :summary :entries}
-        view-diff-file-ids)
-      (outline/render-outline! buffer tree))))
+    (regit-diff/configure-outline-buffer! buffer)
+    (regit-diff/initialize-expanded-ids! buffer tree #{:heading :summary :entries}
+      view-diff-file-ids)
+    (outline/render-outline! buffer tree)))
 
 (defn- find-view-diff-buffer [root section]
   (let [name (view-diff-buffer-name root section)]

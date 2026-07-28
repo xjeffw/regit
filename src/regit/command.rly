@@ -266,8 +266,7 @@
       (when ui-buffer
         (let [content (str/join "\n"
                         (render-state-layout-lines state))]
-          (binding [*buffer* ui-buffer]
-            (set-string content ui-buffer)))))))
+          (set-string content ui-buffer))))))
 
 (defn- render-command-buffer []
   (render-command-buffer-for-state *state*))

@@ -78,9 +78,7 @@
                 (let [target-char (with-read-lock [lock (buffer-text)]
                                     (buffer/line-to-char lock target-line))]
                   (move-cursor target-char false status-window))
-                (binding [*window* status-window
-                          *buffer* status-buffer
-                          *mode* :regit-status
+                (binding [*mode* :regit-status
                           *submodes* #{}]
                   (frame/process-key-event (first (keys/parse-key-sequence "<enter>"))))
                 (let [root (:regit-root @(buffer-state status-buffer))

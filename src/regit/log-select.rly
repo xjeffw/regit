@@ -108,18 +108,17 @@
                 ["  (no commits)"])
         content (str/join "\n" (into [(header-text message)] lines))]
     (set-buffer-read-only false buf)
-    (binding [*buffer* buf]
-      (set-string content buf)
-      (clear-line-overlay :regit-log-select-info buf)
-      (doseq [idx (range (count commits))]
-        (let [commit (nth commits idx)
-              line (inc idx)
-              text (str (theme/with-face (:author commit) :regit-author)
-                     " "
-                     (theme/with-face (str/left-pad (util/format-relative-time (:date commit)) 12) :regit-date))]
-          (add-line-overlay-span :regit-log-select-info line (inc line)
-            {:text text :alignment :right :offset 2}
-            buf))))
+    (set-string content buf)
+    (clear-line-overlay :regit-log-select-info buf)
+    (doseq [idx (range (count commits))]
+      (let [commit (nth commits idx)
+            line (inc idx)
+            text (str (theme/with-face (:author commit) :regit-author)
+                   " "
+                   (theme/with-face (str/left-pad (util/format-relative-time (:date commit)) 12) :regit-date))]
+        (add-line-overlay-span :regit-log-select-info line (inc line)
+          {:text text :alignment :right :offset 2}
+          buf)))
     (set-buffer-read-only true buf)))
 
 (defn commit-id-at-line [line & [buf]]
