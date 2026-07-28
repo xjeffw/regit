@@ -6,6 +6,7 @@
             [relay.base.window :as window]
             [relay.base.frame :as frame]
             [relay.base.theme :as theme]
+            [relay.layout :as layout]
             [relay.layout.style :as layout-style]
             [relay.ui.modeline :as modeline]
             [relay.ui.iselect :as iselect])
@@ -212,15 +213,19 @@
                              :layout []
                              :on-close nil
                              :ui-buffer nil
+                             :overlay-frame nil
                              :return-window nil
                              :keymap nil})))
 
 (defn- initialize-error-state! []
   (set-local! *error-state* (atom {:ui-buffer nil
+                                   :overlay-frame nil
                                    :return-window nil})))
 
 (defn- close-regit-command []
   (let [st (when *state* @*state*)]
+    (when-let [overlay-frame (:overlay-frame st)]
+      (layout/set-minibuffer-overlay-minibuffer-hidden! false overlay-frame))
     (set-minibuffer-ui-height 0)
     (set-minibuffer-height 1)
     (when-let [target (or (:return-window st) (recent-focused-window))]
@@ -232,6 +237,8 @@
 
 (defn- close-regit-error []
   (let [st (when *error-state* @*error-state*)]
+    (when-let [overlay-frame (:overlay-frame st)]
+      (layout/set-minibuffer-overlay-minibuffer-hidden! false overlay-frame))
     (set-minibuffer-ui-height 0)
     (set-minibuffer-height 1)
     (when-let [target (or (:return-window st) (recent-focused-window))]
@@ -265,6 +272,14 @@
   (set-minibuffer-height
     (if (= layout-style/minibuffer-style :overlay) 1 0)))
 
+(defn- overlay-frame-for-window [window]
+  (when (= layout-style/minibuffer-style :overlay)
+    (or (some-> window window-frame) (resolve-frame))))
+
+(defn- set-overlay-minibuffer-hidden! [hidden? overlay-frame]
+  (when overlay-frame
+    (layout/set-minibuffer-overlay-minibuffer-hidden! hidden? overlay-frame)))
+
 (defn- render-command-buffer-for-state [state-atom]
   (frame/with-render-coalescing
     (let [{:keys [ui-buffer] :as state} @state-atom]
@@ -281,6 +296,7 @@
     (let [{:keys [ui-buffer] :as state} @state-atom
           ui-window (minibuffer-ui-window)]
       (when (and ui-buffer ui-window)
+        (set-overlay-minibuffer-hidden! true (:overlay-frame state))
         (set-window-buffer ui-buffer ui-window)
         (set-minibuffer-height-for-ui!)
         (set-minibuffer-ui-height (command-layout-height state))
@@ -311,6 +327,7 @@
                         (when-not (str/blank? value)
                           (set-arg-value! state-atom id value))
                         (restore-command-buffer! state-atom))))]
+    (set-overlay-minibuffer-hidden! false (:overlay-frame @state-atom))
     (iselect/iselect
       prompt
       (fn [_input] entries)
@@ -397,10 +414,12 @@
 (defn open-regit-error [text return-window]
   (let [ui-buffer (create-buffer true)
         ui-window (minibuffer-ui-window)
+        overlay-frame (overlay-frame-for-window return-window)
         lines (error-lines text)
         content (if (seq lines) (str/join "\n" lines) "")]
     (if ui-window
       (do
+        (set-overlay-minibuffer-hidden! true overlay-frame)
         (set-window-buffer ui-buffer ui-window)
         (set-minibuffer-height-for-ui!)
         (set-minibuffer-ui-height (max 1 (count lines)))
@@ -409,6 +428,7 @@
           (activate-mode :regit-error)
           (swap! *error-state* merge
             {:ui-buffer ui-buffer
+             :overlay-frame overlay-frame
              :return-window return-window})
           (set-string content ui-buffer)))
       (message text))))
@@ -418,8 +438,10 @@
         ui-buffer (create-buffer true)
         ui-window (minibuffer-ui-window)]
     (when ui-window
-      (let [return-window (or return-window (focused-window))]
+      (let [return-window (or return-window (focused-window))
+            overlay-frame (overlay-frame-for-window return-window)]
         (frame/with-render-coalescing
+          (set-overlay-minibuffer-hidden! true overlay-frame)
           (set-window-buffer ui-buffer ui-window)
           (set-minibuffer-height-for-ui!)
           (set-minibuffer-ui-height (command-layout-height
@@ -435,6 +457,7 @@
                :layout layout
                :on-close on-close
                :ui-buffer ui-buffer
+               :overlay-frame overlay-frame
                :return-window return-window
                :keymap nil})
             (swap! *state* assoc :keymap (make-keymap (command-keymap-literal @*state*)))
