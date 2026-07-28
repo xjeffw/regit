@@ -6,6 +6,7 @@
             [relay.base.window :as window]
             [relay.base.frame :as frame]
             [relay.base.theme :as theme]
+            [relay.layout.style :as layout-style]
             [relay.ui.modeline :as modeline]
             [relay.ui.iselect :as iselect])
   (:use relay.core relay.builtins))
@@ -260,6 +261,10 @@
 (defn- command-layout-height [state]
   (count (render-state-layout-lines state)))
 
+(defn- set-minibuffer-height-for-ui! []
+  (set-minibuffer-height
+    (if (= layout-style/minibuffer-style :overlay) 1 0)))
+
 (defn- render-command-buffer-for-state [state-atom]
   (frame/with-render-coalescing
     (let [{:keys [ui-buffer] :as state} @state-atom]
@@ -277,7 +282,7 @@
           ui-window (minibuffer-ui-window)]
       (when (and ui-buffer ui-window)
         (set-window-buffer ui-buffer ui-window)
-        (set-minibuffer-height 0)
+        (set-minibuffer-height-for-ui!)
         (set-minibuffer-ui-height (command-layout-height state))
         (set-focused-window ui-window)
         (render-command-buffer-for-state state-atom)))))
@@ -397,7 +402,7 @@
     (if ui-window
       (do
         (set-window-buffer ui-buffer ui-window)
-        (set-minibuffer-height 0)
+        (set-minibuffer-height-for-ui!)
         (set-minibuffer-ui-height (max 1 (count lines)))
         (set-focused-window ui-window)
         (binding [*buffer* ui-buffer]
@@ -416,7 +421,7 @@
       (let [return-window (or return-window (focused-window))]
         (frame/with-render-coalescing
           (set-window-buffer ui-buffer ui-window)
-          (set-minibuffer-height 0)
+          (set-minibuffer-height-for-ui!)
           (set-minibuffer-ui-height (command-layout-height
                                       {:args args
                                        :actions actions

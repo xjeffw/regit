@@ -18,6 +18,7 @@
             [relay.base.project :as project]
             [relay.base.window :as window]
             [relay.layout :as layout]
+            [relay.layout.style :as layout-style]
             [regit.command :as regit-command]
             [regit.diff :as regit-diff]
             [regit.preview :as regit-preview]
@@ -798,9 +799,16 @@
         status-buffer (create-buffer)]
     (binding [*buffer* status-buffer]
       (status/regit-status tmp-dir)
+      (let [frame (window-frame (focused-window))]
+        (set! layout-style/minibuffer-style :overlay)
+        (set-minibuffer-height 1)
+        (reload-frame-layout frame))
       (status/regit-status-show-commands)
-      (let [ui-win (minibuffer-ui-window)]
+      (let [ui-win (minibuffer-ui-window)
+            frame (window-frame (focused-window))]
         (test/assert ui-win "minibuffer-ui-window not opened")
+        (is= 1 (minibuffer-height frame))
+        (is= 1 (:height-rows (frame-layout-entry :minibuffer frame)))
         (let [ui-buf (window-buffer ui-win)
               text (with-read-lock [lock (buffer-text ui-buf)]
                      (buffer/slice lock 0 (buffer/len-chars lock)))]

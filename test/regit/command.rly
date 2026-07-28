@@ -4,6 +4,7 @@
             [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
             [relay.base.keys :as keys]
+            [relay.layout.style :as layout-style]
             [relay.string :as str]
             [relay.test :as test :refer [deftest is= is-error]]))
 
@@ -16,6 +17,24 @@
   (let [rendered (regit-command/choice-bracket ["one" "two" "three"] "two" "fallback" false)
         text (str/strip-properties rendered)]
     (is= "[one|two|three|fallback]" text)))
+
+(deftest regit-command-overlay-preserves-tiled-minibuffer-height-test
+  (let [start-window (focused-window)
+        frame (window-frame start-window)]
+    (set! layout-style/minibuffer-style :overlay)
+    (set-minibuffer-height 1)
+    (reload-frame-layout frame)
+    (regit-command/regit-command
+      {:args {}
+       :actions {"q" {:label "Close" :fn (fn [_] nil)}}
+       :layout ["Actions" {:action "q"}]
+       :return-window start-window})
+    (let [ui-window (minibuffer-ui-window)
+          tiled-minibuffer-entry (frame-layout-entry :minibuffer frame)]
+      (test/assert ui-window "minibuffer-ui-window not opened")
+      (is= 1 (minibuffer-height frame))
+      (is= 1 (:height-rows tiled-minibuffer-entry))
+      (close-regit-command-ui! (window-buffer ui-window)))))
 
 (deftest regit-command-boolean-argument-label-test
   (let [rendered (regit-command/render-command-arg
