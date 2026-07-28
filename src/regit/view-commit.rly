@@ -75,6 +75,8 @@
                     (let [e (first remaining)]
                       (conj children {:id [:file (:path e)]
                                       :text (regit-diff/entry-header-line e {:raw-kind? true})
+                                      :line-overlay-style
+                                      (regit-diff/entry-change-line-overlay-style e)
                                       :landmark [:file (:path e)]
                                       :initially-expanded? false
                                       :entry e

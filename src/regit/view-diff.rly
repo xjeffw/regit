@@ -63,6 +63,8 @@
                   (mapv (fn [e]
                           {:id [:file (:path e)]
                            :text (regit-diff/entry-header-line e)
+                           :line-overlay-style
+                           (regit-diff/entry-change-line-overlay-style e)
                            :landmark [:file (:path e)]
                            :initially-expanded? false
                            :entry e

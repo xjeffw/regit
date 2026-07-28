@@ -355,6 +355,8 @@
                                   old-items @(or (:children-cache cached) (atom nil))]
                               (make-node id
                                 {:text (regit-diff/entry-header-line e)
+                                 :line-overlay-style
+                                 (regit-diff/entry-change-line-overlay-style e)
                                  :landmark id
                                  :entry e
                                  :initially-expanded? false
@@ -372,6 +374,8 @@
                                   old-items @(or (:children-cache cached) (atom nil))]
                               (make-node id
                                 {:text (regit-diff/entry-header-line e)
+                                 :line-overlay-style
+                                 (regit-diff/entry-change-line-overlay-style e)
                                  :landmark id
                                  :entry e
                                  :initially-expanded? false

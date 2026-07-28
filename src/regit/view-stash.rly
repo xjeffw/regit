@@ -77,6 +77,8 @@
                   (mapv (fn [e]
                           {:id [:file :staged (:path e)]
                            :text (regit-diff/entry-header-line e {:raw-kind? true})
+                           :line-overlay-style
+                           (regit-diff/entry-change-line-overlay-style e)
                            :landmark [:file :staged (:path e)]
                            :initially-expanded? false
                            :entry e
@@ -92,6 +94,8 @@
                   (mapv (fn [e]
                           {:id [:file :unstaged (:path e)]
                            :text (regit-diff/entry-header-line e {:raw-kind? true})
+                           :line-overlay-style
+                           (regit-diff/entry-change-line-overlay-style e)
                            :landmark [:file :unstaged (:path e)]
                            :initially-expanded? false
                            :entry e

@@ -73,6 +73,14 @@
             :else (recur (rest remaining) added removed)))
         {:added added :removed removed :entry entry}))))
 
+(defn entry-change-line-overlay-style [entry]
+  (let [{:keys [added removed]} (entry-change-summary entry)]
+    {:text (str
+             (theme/with-face (str "+" added) :success)
+             " "
+             (theme/with-face (str "-" removed) :error))
+     :alignment :right}))
+
 (defn summarize-entries [entries]
   (let [files (mutable-vector)]
     (loop [remaining (seq entries)

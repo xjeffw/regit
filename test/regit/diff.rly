@@ -8,10 +8,35 @@
             [regit.view-commit :as view-commit]
             [regit.view-diff :as view-diff]
             [regit.view-stash :as view-stash]
-            [relay.ui.outline :as outline]))
+            [relay.ui.outline :as outline]
+            [relay.base.theme :as theme]))
 (deftest entry-header-line-includes-file-status-and-path-test
   (let [line (diff/entry-header-line {:kind :modified :path "tracked.txt"})]
     (test/assert (str/includes? line "modified tracked.txt") "entry header missing text")))
+
+(defn- property-string-style-at [text pos]
+  (let [buf (create-buffer true)]
+    (try
+      (set-string text buf)
+      (some-> (first (buffer/property-at pos buf)) style->map)
+      (finally
+        (kill-buffer buf)))))
+
+(deftest entry-change-line-overlay-style-shows-styled-counts-test
+  (let [overlay (diff/entry-change-line-overlay-style
+                  {:diff (str "--- a/tracked.txt\n"
+                           "+++ b/tracked.txt\n"
+                           "@@ -1,2 +1,3 @@\n"
+                           "-old\n"
+                           "+new\n"
+                           "+another\n")})
+        text (:text overlay)]
+    (is= :right (:alignment overlay))
+    (is= "+2 -1" (str/strip-properties text))
+    (is= (style->map (theme/style-for-face :success))
+      (property-string-style-at text 0))
+    (is= (style->map (theme/style-for-face :error))
+      (property-string-style-at text 3))))
 
 (deftest scaled-summary-widths-test
   (let [within-limit (diff/scaled-summary-widths 30 10 40)
@@ -84,6 +109,26 @@
     (if (property-string? text)
       (str/strip-properties text)
       text)))
+
+(deftest regit-view-diff-file-header-renders-change-count-overlay-test
+  (let [root (repo-with-change "regit-view-diff-change-count-overlay-test")]
+    (try
+      (delete-other-windows)
+      (let [buffer (view-diff/regit-view-diff root :unstaged)
+            file-line (find-line (buffer-content buffer) "modified test.txt")
+            span (some
+                   #(when (= (:start %) file-line) %)
+                   (line-overlay-spans
+                     :relay.ui.outline/outline-full-line-overlay
+                     buffer))
+            properties (:properties span)]
+        (test/assert file-line "expected file header line")
+        (test/assert span "expected file header line overlay")
+        (is= (inc file-line) (:end span))
+        (is= :right (:alignment properties))
+        (is= "+1 -1" (str/strip-properties (:text properties))))
+      (finally
+        (sh! "rm" ["-rf" root])))))
 
 (defn- assert-diff-context-renders-hunk-file-header [buffer window diff/header-text content-needle]
   (let [decoration (diff-context-decoration buffer)
