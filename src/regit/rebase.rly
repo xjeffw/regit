@@ -383,8 +383,7 @@
                      (theme/with-face (or (path-filename root) root) :regit-repo)))
           (set-window-buffer buffer window)
           (set-focused-window window)
-          (binding [*buffer* buffer
-                    *window* window]
+          (with-buffer+window [buffer window]
             (activate-mode :git-rebase-todo)
             (buffer/with-override-read-only buffer
               (set-string (render-rebase-todo-text text) buffer))
@@ -415,8 +414,7 @@
                    (theme/with-face (or (path-filename root) root) :regit-repo)))
         (set-window-buffer buffer window)
         (set-focused-window window)
-        (binding [*buffer* buffer
-                  *window* window]
+        (with-buffer+window [buffer window]
           (activate-mode :git-rebase-todo)
           (buffer/with-override-read-only buffer
             (set-string (render-rebase-todo-text text) buffer))

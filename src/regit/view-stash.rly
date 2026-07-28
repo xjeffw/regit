@@ -128,8 +128,7 @@
     (frame/with-render-coalescing
       (set-window-buffer buffer window)
       (set-focused-window window)
-      (binding [*buffer* buffer
-                *window* window]
+      (with-buffer+window [buffer window]
         (configure-view-stash-buffer! buffer root stash-id return-window false existing)
         (move-cursor 0 false window)
         (set-scroll-offset 0 window)
@@ -303,8 +302,7 @@
                      (= (:id *buffer*) (:id window-buffer)))
                  *buffer*
                  (or window-buffer *buffer*))]
-    (binding [*buffer* buffer
-              *window* window]
+    (with-buffer+window [buffer window]
       (let [state @(buffer-state buffer)
             line (current-line)
             item (get (:line-to-item state) line)

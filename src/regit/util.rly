@@ -141,8 +141,7 @@
         :return-window return-window)
       (set-window-buffer buffer window)
       (set-focused-window window)
-      (binding [*buffer* buffer
-                *window* window]
+      (with-buffer+window [buffer window]
         (set-string (render-commit-message-content content) buffer)
         (activate-mode :regit-commit-message)
         (move-cursor 0 false window)

@@ -390,8 +390,7 @@
         :regit-root root
         :label (stashes-buffer-label root))
       (set-window-buffer buffer window)
-      (binding [*buffer* buffer
-                *window* window]
+      (with-buffer+window [buffer window]
         (when-not existing
           (activate-mode :regit-stashes))
         (render-stashes-buffer! buffer root)

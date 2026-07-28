@@ -188,8 +188,7 @@
         :label (log-select-buffer-label root))
       (set-window-buffer buffer window)
       (set-focused-window window)
-      (binding [*buffer* buffer
-                *window* window]
+      (with-buffer+window [buffer window]
         (mode/activate-mode :regit-log-select)
         (render-log-select-buffer! buffer root message target)
         (move-cursor 0 false window)

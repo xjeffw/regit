@@ -247,8 +247,7 @@
     (test/assert (not (string? result)) (str "interactive rebase failed: " result))
     (let [todo-buffer (focused-buffer)
           content (focused-display-content)]
-      (binding [*buffer* todo-buffer
-                *window* (focused-window)]
+      (with-buffer+window [todo-buffer (focused-window)]
         (is= "bash" mode/*language*)
         (doseq [keys-str ["r" "w"]]
           (is= #'rebase/git-rebase-todo-reword

@@ -140,8 +140,7 @@
           (test/assert diff-window "regit-view-diff window not opened")
           (let [diff-buffer (window-buffer diff-window)]
             (is= diff-buffer (:regit-view-diff-buffer @(buffer-state msg-buffer)))
-            (binding [*window* diff-window
-                      *buffer* diff-buffer]
+            (with-buffer+window [diff-buffer diff-window]
               (is= :regit-view-diff *mode*)
               (let [text (buffer-content diff-buffer)]
                 (test/assert (str/includes? text "Staged changes (1)")

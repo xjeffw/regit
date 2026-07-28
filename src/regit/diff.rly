@@ -253,8 +253,7 @@
               (buffer/line-to-char lock target-line))]
     (set-window-buffer buffer window)
     (move-cursor pos false window)
-    (binding [*window* window
-              *buffer* buffer]
+    (with-buffer+window [buffer window]
       (recenter-scroll window))
     buffer))
 
@@ -477,8 +476,7 @@
 (defn sync-diff-context-decoration-size-for-window! [win]
   (let [buffer (safe-window-buffer win)]
     (when (regit-diff-context-decoration-for-buffer buffer)
-      (binding [*buffer* buffer
-                *window* win]
+      (with-buffer+window [buffer win]
         (set-diff-context-decoration-size! buffer
           (diff-context-decoration-size-for-line buffer
             (window-top-visible-line win)))))))

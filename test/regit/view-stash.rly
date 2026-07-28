@@ -46,8 +46,7 @@
         (view-stash/regit-view-stash "stash@{0}")
         (let [view-window (focused-window)
               view-buffer (window-buffer view-window)]
-          (binding [*window* view-window
-                    *buffer* view-buffer]
+          (with-buffer+window [view-buffer view-window]
             (is= :regit-view-stash *mode*)
             (let [text (with-read-lock [lock (buffer-text)]
                          (buffer/slice lock 0 (buffer/len-chars lock)))
@@ -84,8 +83,7 @@
         (call-var regit.status/regit-status tmp-dir)
         (let [status-window (focused-window)
               status-buffer (window-buffer status-window)]
-          (binding [*window* status-window
-                    *buffer* status-buffer]
+          (with-buffer+window [status-buffer status-window]
             (let [lines (with-read-lock [lock (buffer-text)] (str/split-lines (buffer/slice lock 0 (buffer/len-chars lock))))
                   stash-line-idx (some (fn [i] (when (str/includes? (nth lines i) "test stash") i))
                                    (range (count lines)))]
@@ -96,8 +94,7 @@
               (call-var regit.status/regit-status-enter)
               (let [view-window (focused-window)
                     view-buffer (window-buffer view-window)]
-                (binding [*window* view-window
-                          *buffer* view-buffer]
+                (with-buffer+window [view-buffer view-window]
                   (let [view-lines (with-read-lock [lock (buffer-text)] (str/split-lines (buffer/slice lock 0 (buffer/len-chars lock))))
                         header-line-idx (some (fn [i] (when (str/includes? (nth view-lines i) "modified test.txt") i))
                                           (range (count view-lines)))]

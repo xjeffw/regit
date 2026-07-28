@@ -29,8 +29,7 @@
   (let [win (minibuffer-window)
         buf (when win (window-buffer win))]
     (test/assert buf "simple prompt not open")
-    (binding [*window* win
-              *buffer* buf]
+    (with-buffer+window [buf win]
       @simple-prompt/*state*)))
 
 (deftest regit-worktree-command-and-status-binding-test

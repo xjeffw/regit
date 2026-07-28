@@ -199,8 +199,7 @@
 (defn- update-log-preview! []
   (let [source-buffer *buffer*
         source-window (or *window* (focused-window))
-        target (binding [*buffer* source-buffer
-                         *window* source-window]
+        target (with-buffer+window [source-buffer source-window]
                  (preview-target-at-cursor))]
     (regit-preview/update-preview!
       source-buffer
@@ -274,8 +273,7 @@
         :regit-log-limit limit
         :label (log-buffer-label root target))
       (set-window-buffer buffer window)
-      (binding [*buffer* buffer
-                *window* window]
+      (with-buffer+window [buffer window]
         (when-not existing
           (mode/activate-mode :regit-log))
         (render-log-buffer! buffer root target limit))

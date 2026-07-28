@@ -29,8 +29,7 @@
       (log/regit-log-current)
       (let [log-window (focused-window)
             log-buffer (window-buffer log-window)]
-        (binding [*window* log-window
-                  *buffer* log-buffer]
+        (with-buffer+window [log-buffer log-window]
           (let [text (with-read-lock [lock (buffer-text log-buffer)]
                        (buffer/slice lock 0 (buffer/len-chars lock)))]
             (test/assert (str/index-of text "first commit") "regit-log missing first commit message")
@@ -63,8 +62,7 @@
       (log/regit-log-target tmp-dir "origin/feature")
       (let [log-window (focused-window)
             log-buffer (window-buffer log-window)]
-        (binding [*window* log-window
-                  *buffer* log-buffer]
+        (with-buffer+window [log-buffer log-window]
           (let [text (with-read-lock [lock (buffer-text log-buffer)]
                        (buffer/slice lock 0 (buffer/len-chars lock)))
                 label (:label @(buffer-state log-buffer))]
@@ -95,8 +93,7 @@
         (log/regit-log-current)
         (let [log-window (focused-window)
               log-buffer (window-buffer log-window)]
-          (binding [*window* log-window
-                    *buffer* log-buffer]
+          (with-buffer+window [log-buffer log-window]
             (let [lines (buffer-content-lines)
                   log/commit-line (some (fn [i] (when (str/includes? (nth lines i) "disabled log preview commit") i))
                                     (range (count lines)))]
@@ -133,8 +130,7 @@
       (log/regit-log-current)
       (let [log-window (focused-window)
             log-buffer (window-buffer log-window)]
-        (binding [*window* log-window
-                  *buffer* log-buffer]
+        (with-buffer+window [log-buffer log-window]
           (let [lines (buffer-content-lines)
                 second-line (some (fn [i] (when (str/includes? (nth lines i) "second log preview commit") i))
                               (range (count lines)))
@@ -171,15 +167,13 @@
                                          (frame-normal-windows))]
                     (test/assert preview-window "Second commit preview window not found")
                     (test/assert (not= log-window preview-window) "Commit preview did not use another window")
-                    (binding [*window* preview-window
-                              *buffer* preview-buffer]
+                    (with-buffer+window [preview-buffer preview-window]
                       (is= :regit-view-commit *mode*)
                       (let [text (with-read-lock [lock (buffer-text preview-buffer)]
                                    (buffer/slice lock 0 (buffer/len-chars lock)))]
                         (test/assert (str/includes? text "second log preview commit")
                           (str "Commit preview missing second commit summary. Got: " text))))
-                    (binding [*window* log-window
-                              *buffer* log-buffer]
+                    (with-buffer+window [log-buffer log-window]
                       (log/regit-log-enter))
                     (is= preview-window (focused-window))
                     (is= preview-buffer (window-buffer preview-window))
@@ -218,8 +212,7 @@
       (log/regit-log-current)
       (let [log-window (focused-window)
             log-buffer (window-buffer log-window)]
-        (binding [*window* log-window
-                  *buffer* log-buffer]
+        (with-buffer+window [log-buffer log-window]
           (let [lines (buffer-content-lines)
                 first-line (some (fn [i] (when (str/includes? (nth lines i) "first race preview commit") i))
                              (range (count lines)))
@@ -276,8 +269,7 @@
       (log/regit-log-current)
       (let [log-window (focused-window)
             log-buffer (window-buffer log-window)]
-        (binding [*window* log-window
-                  *buffer* log-buffer]
+        (with-buffer+window [log-buffer log-window]
           (let [lines (buffer-content-lines)
                 first-line (some (fn [i] (when (str/includes? (nth lines i) "first orphan preview commit") i))
                              (range (count lines)))
@@ -339,8 +331,7 @@
         (log/regit-log-current)
         (let [log-window (focused-window)
               log-buffer (window-buffer log-window)]
-          (binding [*window* log-window
-                    *buffer* log-buffer]
+          (with-buffer+window [log-buffer log-window]
             (let [lines (buffer-content-lines)
                   first-line (some (fn [i] (when (str/includes? (nth lines i) "first coalesced preview commit") i))
                                (range (count lines)))

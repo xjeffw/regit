@@ -44,8 +44,7 @@
         (view-diff/regit-view-diff tmp-dir)
         (let [view-window (focused-window)
               view-buffer (window-buffer view-window)]
-          (binding [*window* view-window
-                    *buffer* view-buffer]
+          (with-buffer+window [view-buffer view-window]
             (is= :regit-view-diff *mode*)
             (let [text (with-read-lock [lock (buffer-text)]
                          (buffer/slice lock 0 (buffer/len-chars lock)))]
@@ -82,8 +81,7 @@
         (view-diff/regit-view-diff tmp-dir :unstaged)
         (let [view-window (focused-window)
               view-buffer (window-buffer view-window)]
-          (binding [*window* view-window
-                    *buffer* view-buffer]
+          (with-buffer+window [view-buffer view-window]
             (is= :regit-view-diff *mode*)
             (let [text (with-read-lock [lock (buffer-text)]
                          (buffer/slice lock 0 (buffer/len-chars lock)))]
@@ -111,8 +109,7 @@
             line (find-line (buffer-content view) "+line 2 changed")]
         (test/assert line "expected added hunk line in diff view")
         (set-focused-window view-window)
-        (binding [*buffer* view
-                  *window* view-window]
+        (with-buffer+window [view view-window]
           (move-to-line view view-window line)
           (view-diff/regit-view-diff-enter))
         (assert-focused-file-line file-path 1 "line 2 changed"))
@@ -129,8 +126,7 @@
             line (find-line (buffer-content view) "-line 2")]
         (test/assert line "expected removed hunk line in staged diff view")
         (set-focused-window view-window)
-        (binding [*buffer* view
-                  *window* view-window]
+        (with-buffer+window [view view-window]
           (move-to-line view view-window line)
           (view-diff/regit-view-diff-enter))
         (let [target-buffer (assert-focused-buffer-line 1 "line 2")]
@@ -151,16 +147,14 @@
                 status-buffer (window-buffer status-window)
                 staged-line (find-line (buffer-content status-buffer) "Staged changes")]
             (test/assert staged-line "expected staged changes section in status buffer")
-            (binding [*buffer* status-buffer
-                      *window* status-window]
+            (with-buffer+window [status-buffer status-window]
               (move-to-line status-buffer status-window staged-line)
               (call-var regit.status/regit-status-enter))
             (let [view-window (focused-window)
                   view-buffer (window-buffer view-window)
                   added-line (find-line (buffer-content view-buffer) "+line 2 changed")]
               (test/assert added-line "expected added hunk line in staged diff view")
-              (binding [*buffer* view-buffer
-                        *window* view-window]
+              (with-buffer+window [view-buffer view-window]
                 (move-to-line view-buffer view-window added-line)
                 (view-diff/regit-view-diff-enter))
               (let [target-buffer (assert-focused-buffer-line 1 "line 2 changed")]
@@ -180,8 +174,7 @@
             line (find-line (buffer-content view) "-line 2")]
         (test/assert line "expected removed hunk line in staged diff view")
         (set-focused-window view-window)
-        (binding [*buffer* view
-                  *window* view-window]
+        (with-buffer+window [view view-window]
           (move-to-line view view-window line)
           (view-diff/regit-view-diff-jump-to-file))
         (assert-focused-file-line file-path 1 "line 2 changed"))

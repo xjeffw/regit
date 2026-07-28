@@ -218,8 +218,7 @@
     (when commit-window
       (set-window-buffer commit-buffer commit-window)
       (set-focused-window commit-window)
-      (binding [*buffer* commit-buffer
-                *window* commit-window]
+      (with-buffer+window [commit-buffer commit-window]
         (move-cursor 0 false commit-window)
         (set-scroll-offset 0 commit-window)))))
 

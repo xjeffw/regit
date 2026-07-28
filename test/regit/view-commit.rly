@@ -60,8 +60,7 @@
       (regit-status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (with-read-lock [lock (buffer-text)]
                         (str/split-lines (buffer/slice lock 0 (buffer/len-chars lock))))
                 header-line (loop [idx 0
@@ -91,8 +90,7 @@
                                       (frame-normal-windows))]
                     (test/assert view-window "regit-view-commit window not opened")
                     (let [info (when root (git-commit-info root commit-id))]
-                      (binding [*window* view-window
-                                *buffer* view-buffer]
+                      (with-buffer+window [view-buffer view-window]
                         (is= :regit-view-commit *mode*)
                         (let [text (with-read-lock [lock (buffer-text)]
                                      (buffer/slice lock 0 (buffer/len-chars lock)))
@@ -134,8 +132,7 @@
         (view-commit/regit-view-commit commit-id)
         (let [view-window (focused-window)
               view-buffer (window-buffer view-window)]
-          (binding [*window* view-window
-                    *buffer* view-buffer]
+          (with-buffer+window [view-buffer view-window]
             (let [lines (with-read-lock [lock (buffer-text)]
                           (str/split-lines (buffer/slice lock 0 (buffer/len-chars lock))))
                   header (let [{:keys [kind path old-path]} entry]

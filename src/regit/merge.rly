@@ -378,8 +378,7 @@
                       (:out result))]
         (set-window-buffer buffer window)
         (set-focused-window window)
-        (binding [*buffer* buffer
-                  *window* window]
+        (with-buffer+window [buffer window]
           (set-buffer-name (merge-preview-buffer-name root rev) buffer)
           (activate-mode :regit-merge-preview)
           (swap! (buffer-state buffer) assoc

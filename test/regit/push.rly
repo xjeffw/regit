@@ -86,8 +86,7 @@
               cmd (keys/lookup-keys seq)
               initial-pos (cursor-position target-win)]
           (test/assert (ifn? cmd) "could not find command for '<down>'")
-          (binding [*window* target-win
-                    *buffer* target-buf]
+          (with-buffer+window [target-buf target-win]
             (keys/run-key-command cmd seq))
           (let [new-pos (cursor-position target-win)]
             (test/assert (not= initial-pos new-pos) "cursor did not move after '<down>'")))))))

@@ -52,8 +52,7 @@
 (defn- focused-mode []
   (let [win (focused-window)
         buf (window-buffer win)]
-    (binding [*window* win
-              *buffer* buf]
+    (with-buffer+window [buf win]
       *mode*)))
 
 (defn- open-stash-command-at-status-stash! [root stash-message]

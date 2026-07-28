@@ -510,8 +510,7 @@
 (def pending-git-refresh-key :regit-status-pending-git-refresh)
 
 (defn- refresh-status-buffer-in-window! [status-buffer status-window]
-  (binding [*buffer* status-buffer
-            *window* status-window]
+  (with-buffer+window [status-buffer status-window]
     (with-status-buffer-pending (:regit-root status-buffer)
       (rerender-status-buffer!)
       (swap! (buffer-state status-buffer)
@@ -580,8 +579,7 @@
 (defn- update-status-preview! []
   (let [source-buffer *buffer*
         source-window (or *window* (focused-window))
-        target (binding [*buffer* source-buffer
-                         *window* source-window]
+        target (with-buffer+window [source-buffer source-window]
                  (preview-target-at-cursor))]
     (regit-preview/update-preview!
       source-buffer
@@ -1214,8 +1212,7 @@
                           (when buffer
                             (let [window (focused-window)]
                               (set-window-buffer buffer window)
-                              (binding [*window* window
-                                        *buffer* buffer]
+                              (with-buffer+window [buffer window]
                                 (recenter-scroll window)))))
                   ;; Jump into diff (or real file if force-file? is true)
                         (let [hunk-id (if (= type :file) nil (nth path 3))
@@ -1274,8 +1271,7 @@
                                     pos (with-read-lock [lock (buffer-text buffer)]
                                           (relay.base.buffer/line-to-char lock target-line))]
                                 (move-cursor pos false window)
-                                (binding [*window* window
-                                          *buffer* buffer]
+                                (with-buffer+window [buffer window]
                                   (recenter-scroll window))))))))
                     (message "No regit action available at this line")))))))))))
 
@@ -1312,8 +1308,7 @@
         (set-window-buffer buffer window)
         (when focus?
           (set-focused-window window))
-        (binding [*buffer* buffer
-                  *window* window]
+        (with-buffer+window [buffer window]
           (if-not existing
             (do
               (mode/activate-mode :regit-status)
@@ -1446,8 +1441,7 @@
                         (let [window (or return-window (focused-window))
                               buffer (when window (window-buffer window))]
                           (if (and window buffer)
-                            (binding [*window* window
-                                      *buffer* buffer]
+                            (with-buffer+window [buffer window]
                               (f))
                             (f)))))
         actions (assoc

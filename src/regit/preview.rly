@@ -23,8 +23,7 @@
   (try
     (and (source-window-valid? source-buffer source-window)
       (= target
-        (binding [*buffer* source-buffer
-                  *window* source-window]
+        (with-buffer+window [source-buffer source-window]
           (selected-target-fn))))
     (catch exception _ false)))
 
@@ -178,8 +177,7 @@
       (let [focused-before (focused-window)
             source-was-focused? (= focused-before source-window)
             stale-preview (:stale-preview (:regit-preview @(buffer-state source-buffer)))
-            preview-window (binding [*buffer* source-buffer
-                                     *window* source-window]
+            preview-window (with-buffer+window [source-buffer source-window]
                              (or (regit-diff/regit-view-window {:source-window source-window
                                                                 :fallback-to-created-window? true})
                                source-window))]
@@ -188,8 +186,7 @@
               (selected-target-matches? source-buffer source-window selected-target-fn target))
           (frame/with-render-coalescing
             (set-window-buffer preview-buffer preview-window)
-            (binding [*buffer* preview-buffer
-                      *window* preview-window]
+            (with-buffer+window [preview-buffer preview-window]
               (move-cursor 0 false preview-window)
               (set-scroll-offset 0 preview-window))
             (when *after-set-preview-buffer-hook*

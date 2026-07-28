@@ -101,8 +101,7 @@
     (frame/with-render-coalescing
       (set-window-buffer buffer window)
       (set-focused-window window)
-      (binding [*buffer* buffer
-                *window* window]
+      (with-buffer+window [buffer window]
         (set-buffer-name (view-diff-buffer-name root section) buffer)
         (swap! (buffer-state buffer) assoc
           :project-root root
@@ -194,8 +193,7 @@
                      (= (:id *buffer*) (:id window-buffer)))
                  *buffer*
                  (or window-buffer *buffer*))]
-    (binding [*buffer* buffer
-              *window* window]
+    (with-buffer+window [buffer window]
       (let [state @(buffer-state buffer)
             line (current-line)
             item (get (:line-to-item state) line)

@@ -134,8 +134,7 @@
   (let [window (minibuffer-window)
         buffer (when window (window-buffer window))]
     (test/assert buffer "iselect minibuffer should be open")
-    (binding [*window* window
-              *buffer* buffer]
+    (with-buffer+window [buffer window]
       (send-keys character))))
 
 (deftest commit-line-includes-hash-and-summary-test
@@ -192,8 +191,7 @@
           (let [left-window
                 (layout/open-left-panel! left-buffer target-frame)]
             (set-focused-window left-window)
-            (binding [*window* left-window
-                      *buffer* left-buffer]
+            (with-buffer+window [left-buffer left-window]
               (status/regit-status-worktree))
             (enter-iselect-character! "0")
             (wait-for-focused-status root
@@ -227,8 +225,7 @@
         (set-window-buffer source-buffer source-window)
         (reset! project/recent-project-root (str root))
         (reset! project/recent-project-buffer nil)
-        (binding [*window* source-window
-                  *buffer* source-buffer]
+        (with-buffer+window [source-buffer source-window]
           (leader-command)))
       (let [state (iselect-state)
             entries (:entries state)
@@ -281,8 +278,7 @@
 (defn- wait-for-status-preview-buffer [status-buffer status-window target timeout-ms]
   (test/wait-for [preview (or (regit-preview/wait-for-preview-buffer status-buffer target 50)
                             (do
-                              (binding [*buffer* status-buffer
-                                        *window* status-window]
+                              (with-buffer+window [status-buffer status-window]
                                 (status/update-status-preview!))
                               (regit-preview/wait-for-preview-buffer status-buffer target 50)))]
     :until preview
@@ -326,8 +322,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 test-line-idx (find-line-index lines #(str/includes? (str %) "test.txt"))]
             (test/assert test-line-idx "Could not find test.txt in status buffer")
@@ -354,8 +349,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 header-line-idx (find-line-index lines #(str/includes? (str %) "modified test.txt"))]
             (test/assert header-line-idx "Could not find file header in status buffer")
@@ -393,8 +387,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 header-line-idx (find-line-index lines #(str/includes? (str %) "modified test.txt"))]
             (test/assert header-line-idx "Could not find file header in status buffer")
@@ -436,8 +429,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 unstaged-line (find-line-index lines #(str/includes? (str %) "Unstaged changes"))]
             (test/assert unstaged-line "Could not find Unstaged changes section")
@@ -448,8 +440,7 @@
             (let [view-window (focused-window)
                   view-buffer (window-buffer view-window)]
               (test/assert (not= status-window view-window) "regit-view-diff did not open in another window")
-              (binding [*window* view-window
-                        *buffer* view-buffer]
+              (with-buffer+window [view-buffer view-window]
                 (is= :regit-view-diff *mode*)
                 (let [text (with-read-lock [lock (buffer-text)]
                              (buffer/slice lock 0 (buffer/len-chars lock)))]
@@ -459,8 +450,7 @@
                     (str "Unstaged diff missing summary for worktree.txt. Got: " text))
                   (test/assert (not (str/includes? text "index.txt | 2 +-"))
                     (str "Unstaged diff unexpectedly included staged summary. Got: " text)))))))
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (set-focused-window status-window)
           (let [lines (buffer-content-lines)
                 staged-line (find-line-index lines #(str/includes? (str %) "Staged changes"))]
@@ -472,8 +462,7 @@
             (let [view-window (focused-window)
                   view-buffer (window-buffer view-window)]
               (test/assert (not= status-window view-window) "regit-view-diff did not open in another window")
-              (binding [*window* view-window
-                        *buffer* view-buffer]
+              (with-buffer+window [view-buffer view-window]
                 (is= :regit-view-diff *mode*)
                 (let [text (with-read-lock [lock (buffer-text)]
                              (buffer/slice lock 0 (buffer/len-chars lock)))]
@@ -503,8 +492,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 stash-line-idx (find-line-index lines #(str/includes? (str %) "test stash"))]
             (test/assert stash-line-idx "Could not find test stash in status buffer")
@@ -514,8 +502,7 @@
             (status/regit-status-enter)
             (let [view-window (focused-window)
                   view-buffer (window-buffer view-window)]
-              (binding [*window* view-window
-                        *buffer* view-buffer]
+              (with-buffer+window [view-buffer view-window]
                 (is= :regit-view-stash *mode*)
                 (let [text (with-read-lock [lock (buffer-text)]
                              (buffer/slice lock 0 (buffer/len-chars lock)))]
@@ -553,8 +540,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 recent-header (find-line-index lines #(str/includes? (str %) "Recent commits"))
                 recent-line (find-line-index-after lines (or recent-header 0) #(str/includes? (str %) "second preview commit"))
@@ -573,8 +559,7 @@
                                             (frame-normal-windows))]
                 (test/assert commit-preview-window "Commit preview window not found")
                 (test/assert (not= status-window commit-preview-window) "Commit preview focused the status window")
-                (binding [*window* commit-preview-window
-                          *buffer* commit-preview]
+                (with-buffer+window [commit-preview commit-preview-window]
                   (is= :regit-view-commit *mode*)
                   (let [text (with-read-lock [lock (buffer-text commit-preview)]
                                (buffer/slice lock 0 (buffer/len-chars lock)))]
@@ -612,8 +597,7 @@
                       (is= preview-buffer (window-buffer preview-window))
                       (test/assert (not (regit-preview/active-preview status-buffer))
                         "Source status buffer still had active preview state after promotion")
-                      (binding [*window* preview-window
-                                *buffer* preview-buffer]
+                      (with-buffer+window [preview-buffer preview-window]
                         (is= :regit-view-stash *mode*)
                         (test/assert (str/includes? (:name preview-buffer) "*regit-stash: stash@{0}*")
                           (str "Promoted stash preview kept preview name: " (:name preview-buffer))))
@@ -642,8 +626,7 @@
         (status/regit-status tmp-dir)
         (let [status-window (focused-window)
               status-buffer (window-buffer status-window)]
-          (binding [*window* status-window
-                    *buffer* status-buffer]
+          (with-buffer+window [status-buffer status-window]
             (let [lines (buffer-content-lines)
                   recent-header (find-line-index lines #(str/includes? (str %) "Recent commits"))
                   recent-line (find-line-index-after lines (or recent-header 0) #(str/includes? (str %) "disabled status preview commit"))]
@@ -678,8 +661,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 stash-line-idx (find-line-index lines #(str/includes? (str %) "test stash"))]
             (test/assert stash-line-idx "Could not find test stash in status buffer")
@@ -713,8 +695,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 stash-line-idx (find-line-index lines #(str/includes? (str %) "test stale stash"))]
             (test/assert stash-line-idx "Could not find stale stash in status buffer")
@@ -747,8 +728,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 stash-line-idx (find-line-index lines #(str/includes? (str %) "drop me"))]
             (test/assert stash-line-idx "Could not find stash in status buffer")
@@ -759,8 +739,7 @@
             (let [mb-win (minibuffer-window)]
               (test/assert mb-win "minibuffer-window not opened for stash discard confirmation")
               (let [mb-buf (window-buffer mb-win)]
-                (binding [*buffer* mb-buf
-                          *window* mb-win]
+                (with-buffer+window [mb-buf mb-win]
                   (let [prompt (:prompt @simple-prompt/*state*)]
                     (test/assert (str/includes? (str prompt) "drop me")
                       (str "stash discard prompt did not include stash name. Got: " prompt))
@@ -772,8 +751,7 @@
             (let [mb-win (minibuffer-window)]
               (test/assert mb-win "minibuffer-window not opened for stash discard confirmation")
               (let [mb-buf (window-buffer mb-win)]
-                (binding [*buffer* mb-buf
-                          *window* mb-win]
+                (with-buffer+window [mb-buf mb-win]
                   (simple-prompt/simple-prompt-append-char "y"))))
             (is= 0 (count (git-stashes tmp-dir)))
             (let [text (with-read-lock [lock (buffer-text status-buffer)]
@@ -795,8 +773,7 @@
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)
             initial-buffer-count (count (buffer/buffers))]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (is= true (:read-only @(buffer-state status-buffer)))
           (is= :regit-status *mode*)
           (status/regit-status tmp-dir)
@@ -883,8 +860,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))
                 repository-idx (str/index-of content "Repository:")
                 head-idx (str/index-of content (str "Head:        main " subject))]
@@ -918,8 +894,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))]
             (test/assert (str/includes? content (str "Merge:       origin/main " subject)) "expected regit merge summary")
             (test/assert (not (str/includes? content "Rebase:")) "did not expect regit rebase summary")))))
@@ -950,8 +925,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 push-line-idx (find-line-index lines #(str/includes? (str %) "Push:"))
                 item (get (:line-to-item @(buffer-state status-buffer)) push-line-idx)]
@@ -962,8 +936,7 @@
               false status-window)
             (status/regit-status-enter)
             (let [log-buffer (window-buffer status-window)]
-              (binding [*window* status-window
-                        *buffer* log-buffer]
+              (with-buffer+window [log-buffer status-window]
                 (is= :regit-log *mode*)
                 (let [text (with-read-lock [lock (buffer-text log-buffer)]
                              (buffer/slice lock 0 (buffer/len-chars lock)))]
@@ -990,8 +963,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))]
             (test/assert (str/includes? content "Untracked files (1)") "expected untracked section")
             (test/assert (str/includes? content "Unstaged changes (1)") "expected unstaged section")
@@ -1011,8 +983,7 @@
         (status/regit-status root))
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 submodule-line (find-line-index lines
                                  #(str/includes? (str %) "modified content deps/child"))]
@@ -1043,8 +1014,7 @@
         (status/regit-status root))
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)]
             (test/assert (some #(str/includes? (str %) "Unstaged changes (1)") lines)
               (str "new commits should be unstaged: " lines))
@@ -1098,8 +1068,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 file-line (find-line-index lines (fn [l] (str/includes? (str l) "modified tracked.txt")))]
             (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock file-line)) false status-window)
@@ -1126,8 +1095,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 staged-section (find-line-index lines #(str/includes? (str %) "Staged changes"))]
             (test/assert staged-section (str "Missing staged section in " lines))
@@ -1157,8 +1125,7 @@
         (status/regit-status tmp-dir)
         (let [status-window (focused-window)
               status-buffer (window-buffer status-window)]
-          (binding [*window* status-window
-                    *buffer* status-buffer]
+          (with-buffer+window [status-buffer status-window]
             (let [porcelain (get-git-output-raw tmp-dir "status" "--porcelain")
                   content (with-read-lock [lock (buffer-text status-buffer)]
                             (buffer/slice lock 0 (buffer/len-chars lock)))]
@@ -1177,8 +1144,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)]
             (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt")
             (status/regit-stage)
@@ -1205,8 +1171,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [raw-diff (get-git-output tmp-dir "diff" "--cc" "--no-ext-diff" "--" "conflict.txt")]
             (test/assert (str/includes? (str raw-diff) "@@@")
               (str "raw conflict diff should include combined hunk. Got: " raw-diff)))
@@ -1251,8 +1216,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 staged-section (find-line-index lines #(str/includes? (str %) "Staged changes"))]
             (test/assert staged-section (str "Missing staged section in " lines))
@@ -1279,8 +1243,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)]
             (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt")
             (status/regit-discard)
@@ -1323,8 +1286,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)]
             (move-to-line-containing! status-buffer status-window lines "both modified conflict.txt")
             (status/regit-discard)
@@ -1422,8 +1384,7 @@
         (status/regit-status tmp-dir)
         (let [status-window (focused-window)
               status-buffer (window-buffer status-window)]
-          (binding [*window* status-window
-                    *buffer* status-buffer]
+          (with-buffer+window [status-buffer status-window]
             (let [lines (buffer-content-lines)
                   file-line (find-line-index lines #(str/includes? (str %) "scratch.txt"))]
               (test/assert file-line "Could not find untracked file in status buffer")
@@ -1437,8 +1398,7 @@
               (let [mb-win (minibuffer-window)]
                 (test/assert mb-win "minibuffer-window not opened for discard confirmation")
                 (let [mb-buf (window-buffer mb-win)]
-                  (binding [*buffer* mb-buf
-                            *window* mb-win]
+                  (with-buffer+window [mb-buf mb-win]
                     (simple-prompt/simple-prompt-append-char "y"))))
               (test/assert (not (path-exists? untracked))
                 "Discarding an untracked entry should delete the file")
@@ -1468,8 +1428,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 file-line (find-line-index lines (fn [l] (str/includes? (str l) "modified tracked.txt")))]
             (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock file-line)) false status-window)
@@ -1516,8 +1475,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 section-line (find-line-index lines (fn [l] (str/includes? (str l) "Unstaged changes (1)")))]
             (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock section-line)) false status-window)
@@ -1525,8 +1483,7 @@
             (let [mb-win (minibuffer-window)]
               (test/assert mb-win "minibuffer-window not opened for confirmation prompt")
               (let [mb-buf (window-buffer mb-win)]
-                (binding [*buffer* mb-buf
-                          *window* mb-win]
+                (with-buffer+window [mb-buf mb-win]
                   (simple-prompt/simple-prompt-append-char "Y"))))
             (let [staged-diff (get-git-output tmp-dir "diff" "--cached" "--" "tracked.txt")]
               (test/assert (str/includes? (str staged-diff) "+after") "expected staged diff to contain +after"))))))
@@ -1549,8 +1506,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 file-line (find-line-index lines (fn [l] (str/includes? (str l) "modified tracked.txt")))]
             (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock file-line)) false status-window)
@@ -1562,8 +1518,7 @@
               (let [mb-win (minibuffer-window)]
                 (test/assert mb-win "minibuffer-window not opened for confirmation prompt")
                 (let [mb-buf (window-buffer mb-win)]
-                  (binding [*buffer* mb-buf
-                            *window* mb-win]
+                  (with-buffer+window [mb-buf mb-win]
                     (simple-prompt/simple-prompt-append-char "n"))))
               (let [unstaged-diff (get-git-output tmp-dir "diff" "--" "tracked.txt")]
                 (test/assert (str/includes? (str unstaged-diff) "+after")
@@ -1572,8 +1527,7 @@
               (let [mb-win (minibuffer-window)]
                 (test/assert mb-win "minibuffer-window not opened for confirmation prompt")
                 (let [mb-buf (window-buffer mb-win)]
-                  (binding [*buffer* mb-buf
-                            *window* mb-win]
+                  (with-buffer+window [mb-buf mb-win]
                     (simple-prompt/simple-prompt-append-char "y"))))
               (let [unstaged-diff (get-git-output tmp-dir "diff" "--" "tracked.txt")]
                 (test/assert (str/blank? unstaged-diff)
@@ -1603,8 +1557,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 f1-idx (find-line-index lines #(str/includes? (str %) "modified file1.txt"))
                 f2-idx (find-line-index lines #(str/includes? (str %) "modified file2.txt"))]
@@ -1671,8 +1624,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 file1-line (find-line-index lines #(str/includes? (str %) "modified file1.txt"))]
             (move-cursor (with-read-lock [lock (buffer-text status-buffer)] (buffer/line-to-char lock file1-line)) false status-window)
@@ -1701,8 +1653,7 @@
                     (let [mb-win (minibuffer-window)]
                       (test/assert mb-win "minibuffer-window not opened for discard confirmation")
                       (let [mb-buf (window-buffer mb-win)]
-                        (binding [*buffer* mb-buf
-                                  *window* mb-win]
+                        (with-buffer+window [mb-buf mb-win]
                           (simple-prompt/simple-prompt-append-char "y"))))
 
                     (let [lines (buffer-content-lines)]
@@ -1729,8 +1680,7 @@
       (status/regit-status root)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [target-file-line
                 (find-line-index
                   (buffer-content-lines)
@@ -1809,8 +1759,7 @@
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)
             clean-lines
-            (binding [*window* status-window
-                      *buffer* status-buffer]
+            (with-buffer+window [status-buffer status-window]
               (buffer-content-lines))
             commit-line
             (last
@@ -1829,8 +1778,7 @@
         (write-file tracked-path changed-content)
         (hook/run-hooks git/on-git-changed root [root])
 
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [lines (buffer-content-lines)
                 file-line
                 (find-line-index lines
@@ -1955,8 +1903,7 @@
       (status/regit-status worktree)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*buffer* status-buffer
-                  *window* status-window]
+        (with-buffer+window [status-buffer status-window]
           (test/assert
             (not
               (some
@@ -1988,8 +1935,7 @@
         _ (write-file (str tmp-dir "/file2.txt") "a modified\nb\n")
         status-buffer (status/regit-status tmp-dir false)
         status-window (first (buffer-windows status-buffer))]
-    (binding [*buffer* status-buffer
-              *window* status-window]
+    (with-buffer+window [status-buffer status-window]
       (loop [i 0]
         (if (and (< i 20) (not= :regit-status *mode*))
           (do (sleep 0.1) (recur (inc i)))
@@ -2056,8 +2002,7 @@
         _ (write-file (str tmp-dir "/file1.txt") "line1 modified\nline2\n")
         status-buffer (status/regit-status tmp-dir false)
         status-window (first (buffer-windows status-buffer))]
-    (binding [*buffer* status-buffer
-              *window* status-window]
+    (with-buffer+window [status-buffer status-window]
       (loop [i 0]
         (if (and (< i 20) (not= :regit-status *mode*))
           (do (sleep 0.1) (recur (inc i)))
@@ -2098,8 +2043,7 @@
         _ (write-file tracked "line1 modified\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10 modified\n")
         status-buffer (status/regit-status tmp-dir)
         status-window (focused-window)]
-    (binding [*buffer* status-buffer
-              *window* status-window]
+    (with-buffer+window [status-buffer status-window]
       (let [lines (buffer-content-lines)
             f-line (find-line-index lines #(str/includes? % "modified tracked.txt"))]
         (test/assert f-line (str "File line not found in " lines))
@@ -2149,8 +2093,7 @@
         _ (write-file tracked "line1 modified\n")
         status-buffer (status/regit-status tmp-dir)
         status-window (focused-window)]
-    (binding [*buffer* status-buffer
-              *window* status-window]
+    (with-buffer+window [status-buffer status-window]
       (let [lines (buffer-content-lines)
             f-line (find-line-index lines #(str/includes? % "modified tracked.txt"))]
         (test/assert f-line (str "File line not found in " lines))
@@ -2178,8 +2121,7 @@
         _ (write-file tracked "line1 modified\nline2\n")
         status-buffer (status/regit-status tmp-dir)
         status-window (focused-window)]
-    (binding [*buffer* status-buffer
-              *window* status-window]
+    (with-buffer+window [status-buffer status-window]
       (let [lines (buffer-content-lines)
             f-line (find-line-index lines #(str/includes? % "modified tracked.txt"))]
         (test/assert f-line (str "File line not found in " lines))
@@ -2363,8 +2305,7 @@
       (status/regit-status tmp-dir)
       (let [status-window (focused-window)
             status-buffer (window-buffer status-window)]
-        (binding [*window* status-window
-                  *buffer* status-buffer]
+        (with-buffer+window [status-buffer status-window]
           (let [content (with-read-lock [lock (buffer-text status-buffer)] (buffer/slice lock 0 (buffer/len-chars lock)))]
             (test/assert (str/includes? content "Untracked files (5)") (str "Expected Untracked files (5), got content: " content))
             (test/assert (str/includes? content "Unstaged changes (5)") (str "Expected Unstaged changes (5), got content: " content))

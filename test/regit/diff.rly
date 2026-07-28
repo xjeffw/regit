@@ -151,8 +151,7 @@
           "regit status buffers should install diff context decoration")
         (is= :top (:side decoration))
         (is= 0 (:size decoration))
-        (binding [*buffer* buffer
-                  *window* window]
+        (with-buffer+window [buffer window]
           (move-to-line buffer window (find-line (buffer-content buffer) "modified test.txt"))
           (outline/toggle-fold))
         (let [text (buffer-content buffer)

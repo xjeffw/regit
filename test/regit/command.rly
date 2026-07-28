@@ -96,8 +96,7 @@
        :return-window start-window})
     (let [ui-window (minibuffer-ui-window)]
       (test/assert ui-window "minibuffer-ui-window not opened")
-      (binding [*window* ui-window
-                *buffer* (window-buffer ui-window)]
+      (with-buffer+window [(window-buffer ui-window) ui-window]
         (let [seq (keys/parse-key-sequence "x")
               cmd (keys/lookup-keys seq)]
           (test/assert (ifn? cmd) "could not find action command for 'x'")
@@ -105,8 +104,7 @@
     (let [err-window (minibuffer-ui-window)
           err-buffer (window-buffer err-window)]
       (test/assert err-window "regit-error window not opened")
-      (binding [*window* err-window
-                *buffer* err-buffer]
+      (with-buffer+window [err-buffer err-window]
         (is= :regit-error *mode*)
         (let [text (with-read-lock [lock (buffer-text)]
                      (buffer/slice lock 0 (buffer/len-chars lock)))]
