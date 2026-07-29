@@ -181,6 +181,14 @@
                       "Source log buffer still had active preview state after promotion")
                     (test/assert (str/includes? (:name preview-buffer) "*regit-commit: ")
                       (str "Promoted log preview kept preview name: " (:name preview-buffer)))
+                    (let [entries-plan (find-if #(= :entries (:id (:item %)))
+                                         (:outline-plan @(buffer-state preview-buffer)))]
+                      (test/assert entries-plan "Promoted commit outline is missing its changes entry")
+                      (when entries-plan
+                        (let [rendered (str/strip-properties (:text entries-plan))
+                              expected (str/strip-properties (:text (:item entries-plan)))]
+                          (test/assert (= expected rendered)
+                            (str "Promoted commit outline added an unexpected prefix: " rendered)))))
                     (set-focused-window log-window)
                     (move-cursor 0 false log-window)
                     (test/assert (some #(= (:id %) (:id preview-buffer)) (buffer/buffers))
