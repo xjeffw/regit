@@ -353,9 +353,18 @@
                 (let [action (get-in @*state* [:actions id])
                       f (:fn action)
                       args-values (map-vals :value (:args @*state*))
-                      return-window (:return-window @*state*)]
+                      return-window (:return-window @*state*)
+                      status-root
+                      (some-> return-window window-buffer :regit-root)]
                   (close-regit-command)
-                  (let [result (f args-values)
+                  (let [result (try
+                                 (f args-values)
+                                 (finally
+                                   (when status-root
+                                     (log-errors
+                                       (call-var
+                                         regit.status/refresh-status-after-command!
+                                         status-root)))))
                         error-message (cond
                                         (string? result) result
                                         (map? result) (or (:error result) (:message result))

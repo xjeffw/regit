@@ -588,6 +588,8 @@
     (send-keys "e")
     (choose-target! "newbase")
     (assert-focused-status elsewhere-dir "elsewhere rebase complete")
+    (test/assert (str/includes? (focused-content) "Unmerged into origin/main")
+      "status should show commits unmerged into origin/main immediately after rebase")
     (test/assert (some #(= % "newbase") (log-subjects elsewhere-dir)) "elsewhere rebase should include selected target")
     (cleanup elsewhere-dir)))
 

@@ -472,7 +472,22 @@
           (min fuzzy last-line)
           (min fallback-line last-line))))))
 
-(defn- rerender-status-buffer! [& [preferred-path]]
+;; A Git notification can start a refresh before a regit command finishes.
+;; Keep each buffer's status scan and outline update in the same critical section
+;; so the earlier refresh cannot overwrite the command's final state.
+(def status-refresh-mutex-key :regit-status-refresh-mutex)
+
+(defn- status-refresh-mutex [buffer]
+  (or (get @(buffer-state buffer) status-refresh-mutex-key)
+    (let [mutex (make-mutex)]
+      (swap! (buffer-state buffer)
+        (fn [state]
+          (if (contains? state status-refresh-mutex-key)
+            state
+            (assoc state status-refresh-mutex-key mutex))))
+      (get @(buffer-state buffer) status-refresh-mutex-key))))
+
+(defn- rerender-status-buffer-unlocked! [& [preferred-path]]
   (when-let [root (:regit-root (resolve-buffer))]
     (let [buffer (resolve-buffer)
           window (or (when (and (resolve-window)
@@ -505,6 +520,13 @@
             (ensure-scroll-offset window)
             (ensure-horizontal-scroll-offset window)))
         (outline/update-outline-hint-highlight!)))))
+
+(defn- rerender-status-buffer! [& [preferred-path]]
+  (let [buffer (resolve-buffer)]
+    (call-with-mutex
+      (status-refresh-mutex buffer)
+      (fn []
+        (rerender-status-buffer-unlocked! preferred-path)))))
 
 (defn- regit-status-buffer? [candidate]
   (and (:regit-root candidate)
@@ -1315,7 +1337,9 @@
           (if-not existing
             (do
               (mode/activate-mode :regit-status)
-              (render-status-buffer! buffer root)
+              (call-with-mutex
+                (status-refresh-mutex buffer)
+                (fn [] (render-status-buffer! buffer root)))
               (move-cursor 0 false window)
               (set-scroll-offset 0 window))
             (rerender-status-buffer!))
@@ -1335,6 +1359,14 @@
         (when focus? (set-focused-window status-window))
         (regit-status root focus?))
       (regit-status root focus?))))
+
+(defn refresh-status-after-command! [root]
+  (when-let [status-buffer (find-status-buffer root)]
+    (project/clear-git-caches! root)
+    (if-let [status-window (first (buffer-windows status-buffer))]
+      (refresh-status-buffer-in-window! status-buffer status-window)
+      (swap! (buffer-state status-buffer)
+        assoc pending-git-refresh-key true))))
 
 (defn ^:interactive regit-status-apply []
   (let [line (current-line)

@@ -1,6 +1,13 @@
 (ns regit.tests.command
   (:require [regit.command :as regit-command]
-            [regit.tests.util :refer [buffer-display-content]]
+            [regit.status :as status]
+            [regit.tests.util :refer [buffer-display-content
+                                      cleanup
+                                      commit-file!
+                                      git!
+                                      init-test-repo
+                                      invoke-command-key!
+                                      status-content]]
             [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
             [relay.base.keys :as keys]
@@ -149,3 +156,28 @@
                 *submodes* #{}]
         (frame/process-key-event (first (keys/parse-key-sequence "<esc>"))))
       (is= start-window (focused-window)))))
+
+(deftest regit-command-action-refreshes-originating-status-buffer-test
+  (let [root (init-test-repo "regit-command-refresh-status")]
+    (try
+      (git! root "remote" "add" "origin" root)
+      (git! root "update-ref" "refs/remotes/origin/main" "HEAD")
+      (git! root "branch" "--set-upstream-to=origin/main" "main")
+      (status/regit-status root)
+      (test/assert
+        (not (str/includes? (status-content root) "Unmerged into origin/main"))
+        "status should start without unmerged commits")
+      (regit-command/regit-command
+        {:args {}
+         :actions {"c" {:label "Commit"
+                        :fn (fn [_]
+                              (commit-file! root "new.txt" "new\n" "new"))}}
+         :layout ["Actions" {:action "c"}]
+         :return-window (focused-window)})
+      (invoke-command-key! "c")
+      (test/assert
+        (str/includes? (status-content root) "Unmerged into origin/main (1)")
+        (str "regit command did not refresh its originating status buffer:\n"
+          (status-content root)))
+      (finally
+        (cleanup root)))))
