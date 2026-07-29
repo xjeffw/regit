@@ -806,15 +806,23 @@
       (status/regit-status-show-commands)
       (let [ui-win (minibuffer-ui-window)
             frame (window-frame (focused-window))
-            minibuffer-popup
-            (find-if
-              #(= :minibuffer (:layout-popup-key %))
-              (:popups (frame-layout frame)))]
+            minibuffer-entry
+            (frame-layout-entry :minibuffer frame)
+            minibuffer-ui-entry
+            (frame-layout-entry :minibuffer-ui frame)]
         (test/assert ui-win "minibuffer-ui-window not opened")
         (is= 1 (minibuffer-height frame))
-        (is= 1 (:height-rows (frame-layout-entry :minibuffer frame)))
-        (is= false (:render minibuffer-popup))
-        (is= 0 (:height-rows minibuffer-popup))
+        (is= 1 (:height-rows minibuffer-entry))
+        (is= true (:render minibuffer-entry))
+        (is= (minibuffer-ui-height frame)
+          (:height-rows minibuffer-ui-entry))
+        (is= true (:render minibuffer-ui-entry))
+        (is= 0
+          (count
+            (filter
+              #(contains? #{:minibuffer :minibuffer-ui}
+                 (:layout-popup-key %))
+              (:popups (frame-layout frame)))))
         (let [ui-buf (window-buffer ui-win)
               text (with-read-lock [lock (buffer-text ui-buf)]
                      (buffer/slice lock 0 (buffer/len-chars lock)))]

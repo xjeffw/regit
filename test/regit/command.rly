@@ -25,7 +25,7 @@
         text (str/strip-properties rendered)]
     (is= "[one|two|three|fallback]" text)))
 
-(deftest regit-command-overlay-preserves-tiled-minibuffer-height-test
+(deftest regit-command-uses-tiled-minibuffer-with-overlay-configured-test
   (let [start-window (focused-window)
         frame (window-frame start-window)]
     (set! layout-style/minibuffer-style :overlay)
@@ -38,23 +38,31 @@
        :return-window start-window})
     (let [ui-window (minibuffer-ui-window)
           tiled-minibuffer-entry (frame-layout-entry :minibuffer frame)
-          minibuffer-popup
-          (find-if
-            #(= :minibuffer (:layout-popup-key %))
-            (:popups (frame-layout frame)))]
+          tiled-minibuffer-ui-entry
+          (frame-layout-entry :minibuffer-ui frame)]
       (test/assert ui-window "minibuffer-ui-window not opened")
       (is= 1 (minibuffer-height frame))
       (is= 1 (:height-rows tiled-minibuffer-entry))
-      (is= false (:render minibuffer-popup))
-      (is= 0 (:height-rows minibuffer-popup))
+      (is= true (:render tiled-minibuffer-entry))
+      (is= (minibuffer-ui-height frame)
+        (:height-rows tiled-minibuffer-ui-entry))
+      (is= true (:render tiled-minibuffer-ui-entry))
+      (is= 0
+        (count
+          (filter
+            #(contains? #{:minibuffer :minibuffer-ui}
+               (:layout-popup-key %))
+            (:popups (frame-layout frame)))))
       (close-regit-command-ui! (window-buffer ui-window))
       (set-minibuffer-ui-height 1)
-      (let [restored-minibuffer-popup
-            (find-if
-              #(= :minibuffer (:layout-popup-key %))
-              (:popups (frame-layout frame)))]
-        (is= true (:render restored-minibuffer-popup))
-        (is= 1 (:height-rows restored-minibuffer-popup)))
+      (let [restored-minibuffer-entry
+            (frame-layout-entry :minibuffer frame)
+            restored-minibuffer-ui-entry
+            (frame-layout-entry :minibuffer-ui frame)]
+        (is= true (:render restored-minibuffer-entry))
+        (is= 1 (:height-rows restored-minibuffer-entry))
+        (is= true (:render restored-minibuffer-ui-entry))
+        (is= 1 (:height-rows restored-minibuffer-ui-entry)))
       (set-minibuffer-ui-height 0))))
 
 (deftest regit-command-boolean-argument-label-test
