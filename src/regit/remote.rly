@@ -3,7 +3,7 @@
             [regit.util :refer [git-cmd! with-status-buffer-pending]]
             [relay.ui.iselect :as iselect]
             [relay.ui.simple-prompt :as simple-prompt]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.string :as str]
             [relay.base.theme :as theme]
             [relay.base.frame :as frame])

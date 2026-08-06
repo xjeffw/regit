@@ -1,7 +1,7 @@
 (ns regit.worktree
   (:require [regit.command :refer [regit-command]]
             [regit.util :refer [git-cmd!]]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.string :as str]
             [relay.ui.iselect :as iselect]
             [relay.ui.simple-prompt :as simple-prompt])

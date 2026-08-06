@@ -3,7 +3,7 @@
             [regit.util :refer [git-cmd!]]
             [relay.string :as str]
             [relay.base.theme :as theme]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.util :as util]
             [relay.base.keys :as keys]
             [relay.base.window :as window]

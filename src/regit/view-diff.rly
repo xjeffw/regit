@@ -2,7 +2,7 @@
   (:require [relay.base.mode :as mode]
             [relay.base.frame :as frame]
             [relay.base.keys :as keys :refer [make-keymap map!]]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.ui.outline :as outline]
             [relay.string :as str]
             [regit.diff :as regit-diff]

@@ -8,7 +8,7 @@
             [relay.base.hook :refer [run-hooks]]
             [relay.string :as str]
             [relay.base.theme :as theme]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.base.keys :as keys :refer [make-keymap map!]]
             [relay.base.frame :as frame]
             [relay.base.mode :refer [register-mode activate-mode]]

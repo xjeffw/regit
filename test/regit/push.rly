@@ -3,7 +3,7 @@
             [relay.base.buffer :as buffer]
             [relay.base.frame :as frame]
             [relay.base.keys :as keys]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [regit.command :as regit-command]
             [relay.string :as str]
             [relay.util :as util]

@@ -27,7 +27,7 @@
             [regit.diff :as regit-diff]
             [regit.preview :as regit-preview]
             [regit.synthetic :as regit-synthetic]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.ui.outline :as outline]
             [relay.string :as str]
             [relay.base.theme :as theme]

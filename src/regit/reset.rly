@@ -3,7 +3,7 @@
             [regit.diff :as regit-diff]
             [regit.util :refer [git-cmd! with-status-buffer-pending]]
             [relay.ui.iselect :as iselect]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.base.buffer :as buffer]
             [relay.base.hook :refer [run-hooks]]
             [relay.string :as str])

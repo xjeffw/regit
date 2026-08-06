@@ -10,7 +10,7 @@
             [regit.reset :refer [regit-reset]]
             [regit.util :refer [git-cmd! regit-icon]]
             [regit.view-commit :refer [regit-view-commit]]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.ui.hl-line]
             [relay.string :as str]
             [relay.base.theme :as theme]

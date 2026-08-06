@@ -5,7 +5,7 @@
             [relay.base.hook :refer [run-hooks]]
             [relay.base.keys :refer [make-keymap map!]]
             [relay.base.mode :refer [register-mode activate-mode]]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.base.buffer :as buffer]
             [relay.base.theme :as theme]
             [relay.string :as str])

@@ -15,7 +15,7 @@
             [relay.base.hook :as hook]
             [relay.base.keys :as keys]
             [relay.base.mode :as mode]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.base.window :as window]
             [relay.layout :as layout]
             [relay.layout.style :as layout-style]

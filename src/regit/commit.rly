@@ -4,7 +4,7 @@
             [regit.util :as regit-util]
             [relay.base.hook :refer [run-hooks]]
             [relay.string :as str]
-            [relay.base.project :as project]
+            [relay.project :as project]
             [relay.base.keys :as keys :refer [make-keymap map!]]
             [relay.base.mode :refer [register-mode activate-mode]]
             [relay.base.buffer :as buffer])
