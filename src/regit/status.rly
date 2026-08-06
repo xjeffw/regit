@@ -9,7 +9,7 @@
             [relay.layout :as layout]
             [relay.ui.simple-prompt :as simple-prompt]
             [relay.ui.iselect :as iselect]
-            [relay.ui.panels.project :as project-panel]
+            [relay.ui.panels.project.actions :as project-panel-actions]
             [regit.util :refer [git-cmd! with-status-buffer-pending regit-icon]]
             [regit.push :refer [regit-push]]
             [regit.fetch :refer [regit-fetch]]
@@ -1401,7 +1401,7 @@
 
 (defn ^:interactive regit-status-worktree []
   (if (mode/global-mode-active? :worktree-layout)
-    (project-panel/project-select-worktree
+    (project-panel-actions/project-select-worktree
       (fn [root]
         (regit-status root)))
     (select-worktree
